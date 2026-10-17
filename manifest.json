@@ -2,7 +2,7 @@
   {
     "display_name": "VMovies",
     "value": "vega",
-    "version": "2.46",
+    "version": "2.51",
     "icon": "https://cdn.jsdelivr.net/gh/Zenda-Cross/vega-providers@main/assets/vega.png",
     "type": "global",
     "disabled": false,
@@ -121,7 +121,7 @@
   {
     "display_name": "MovieBox Web",
     "value": "movieBoxWeb",
-    "version": "1.8",
+    "version": "2.4",
     "icon": "https://cdn.jsdelivr.net/gh/Zenda-Cross/vega-providers@main/assets/movieBoxWeb.png",
     "type": "global",
     "disabled": false
@@ -485,7 +485,7 @@
   {
     "display_name": "MovieLinkBD",
     "value": "movielinkdb",
-    "version": "1.0",
+    "version": "1.01",
     "icon": "https://cdn.jsdelivr.net/gh/Zenda-Cross/vega-providers@main/assets/movielinkdb.png",
     "type": "india",
     "disabled": false
