@@ -19,6 +19,11 @@ export interface Post {
   cornerTag?: string;
 }
 
+export interface CatalogCategory {
+  title: string;
+  filter: string;
+}
+
 export interface DirectLink {
   title: string;
   link: string;

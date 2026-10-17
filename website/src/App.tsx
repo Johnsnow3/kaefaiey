@@ -19,11 +19,12 @@ import { MediaCard } from "./components/MediaCard";
 import { MediaDetails } from "./components/MediaDetails";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { WatchlistView } from "./components/WatchlistView";
-import { Post, Provider, MediaStream } from "./types";
+import { Post, Provider, MediaStream, CatalogCategory } from "./types";
 import {
   fetchProviders,
   fetchPosts,
   searchPosts,
+  fetchCatalog,
   testProviderHealth,
 } from "./services/api";
 import {
@@ -36,9 +37,13 @@ export const App: React.FC = () => {
   // Provider states
   const [providers, setProviders] = useState<Provider[]>([]);
   const [activeProvider, setActiveProvider] = useState<string>(
-    () => getActiveProvider() || "autoEmbed"
+    () => getActiveProvider() || "vega"
   );
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Dynamic Catalog Categories for active provider
+  const [categories, setCategories] = useState<CatalogCategory[]>([]);
+  const [activeCategoryFilter, setActiveCategoryFilter] = useState<string>("");
 
   // Content feeds
   const [activeTab, setActiveTab] = useState("all");
@@ -74,14 +79,15 @@ export const App: React.FC = () => {
       const provs = await fetchProviders();
       setProviders(provs);
 
-      // Verify active provider is in list; otherwise select a rock-solid default
+      // Verify active provider is in list; otherwise select a rock-solid default (vega or first with posts)
       const current = getActiveProvider();
       if (!current || !provs.some((p) => p.id === current)) {
         const fallback =
-          provs.find((p) => p.id === "autoEmbed")?.id ||
+          provs.find((p) => p.id === "vega")?.id ||
           provs.find((p) => p.id === "flixhq")?.id ||
+          provs.find((p) => p.id === "autoEmbed")?.id ||
           provs[0]?.id ||
-          "autoEmbed";
+          "vega";
         setActiveProvider(fallback);
         saveActiveProvider(fallback);
       }
@@ -89,7 +95,32 @@ export const App: React.FC = () => {
     init();
   }, []);
 
-  // Fetch posts when provider, activeTab, or page changes
+  // Fetch catalog categories whenever activeProvider changes
+  useEffect(() => {
+    async function loadCatalogCategories() {
+      try {
+        const cat = await fetchCatalog(activeProvider);
+        if (cat && cat.length > 0) {
+          const hasEmpty = cat.some((c: any) => c.filter === "");
+          const fullList: CatalogCategory[] = hasEmpty
+            ? cat
+            : [{ title: "All", filter: "" }, ...cat];
+          setCategories(fullList);
+          setActiveCategoryFilter(fullList[0].filter);
+        } else {
+          setCategories([{ title: "All Content", filter: "" }]);
+          setActiveCategoryFilter("");
+        }
+      } catch {
+        setCategories([{ title: "All Content", filter: "" }]);
+        setActiveCategoryFilter("");
+      }
+      setPage(1);
+    }
+    loadCatalogCategories();
+  }, [activeProvider]);
+
+  // Fetch posts when provider, category filter, activeTab, or page changes
   const loadPosts = useCallback(async () => {
     if (activeTab === "watchlist") return;
     setLoadingPosts(true);
@@ -101,13 +132,7 @@ export const App: React.FC = () => {
         setPosts(res.posts);
         setHasMore(res.posts.length > 0);
       } else {
-        // Construct filter based on active tab
-        let filter = "";
-        if (activeTab === "movies") filter = "movie";
-        else if (activeTab === "series") filter = "series";
-        else if (activeTab === "anime") filter = "anime";
-
-        const res = await fetchPosts(activeProvider, filter, page);
+        const res = await fetchPosts(activeProvider, activeCategoryFilter, page);
         setPosts(res.posts);
         setHasMore(res.posts.length >= 10);
       }
@@ -119,7 +144,7 @@ export const App: React.FC = () => {
     } finally {
       setLoadingPosts(false);
     }
-  }, [activeProvider, activeTab, searchQuery, page]);
+  }, [activeProvider, activeCategoryFilter, activeTab, searchQuery, page]);
 
   useEffect(() => {
     loadPosts();
@@ -129,6 +154,7 @@ export const App: React.FC = () => {
   const handleSelectProvider = (provId: string) => {
     setActiveProvider(provId);
     saveActiveProvider(provId);
+    setSearchQuery("");
     setPage(1);
     setIsSidebarOpen(false);
   };
@@ -145,6 +171,41 @@ export const App: React.FC = () => {
     setActiveTab(tab);
     setSearchQuery("");
     setPage(1);
+
+    if (tab === "movies") {
+      const match = categories.find((c) =>
+        c.title.toLowerCase().includes("movie")
+      );
+      if (match) setActiveCategoryFilter(match.filter);
+    } else if (tab === "series") {
+      const match = categories.find(
+        (c) =>
+          c.title.toLowerCase().includes("series") ||
+          c.title.toLowerCase().includes("show") ||
+          c.title.toLowerCase().includes("tv")
+      );
+      if (match) setActiveCategoryFilter(match.filter);
+    } else if (tab === "anime") {
+      const match = categories.find((c) =>
+        c.title.toLowerCase().includes("anime")
+      );
+      if (match) {
+        setActiveCategoryFilter(match.filter);
+      } else {
+        // Switch to dedicated anime provider
+        const animeProv =
+          providers.find((p) => p.id === "hiAnime")?.id ||
+          providers.find((p) => p.id === "kissKh")?.id ||
+          providers.find((p) => p.id === "animesub")?.id;
+        if (animeProv && animeProv !== activeProvider) {
+          handleSelectProvider(animeProv);
+        }
+      }
+    } else if (tab === "all") {
+      if (categories.length > 0) {
+        setActiveCategoryFilter(categories[0].filter);
+      }
+    }
   };
 
   return (
@@ -172,7 +233,7 @@ export const App: React.FC = () => {
 
         {/* Main Workspace Area */}
         <main className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
-          {/* Active Provider Pill Banner (Mobile / Tablet quick glance) */}
+          {/* Active Provider Banner (Mobile / Tablet quick glance) */}
           <div className="lg:hidden px-4 pt-3 pb-1 flex items-center justify-between bg-slate-900/60 border-b border-slate-800">
             <button
               onClick={() => setIsSidebarOpen(true)}
@@ -200,13 +261,13 @@ export const App: React.FC = () => {
             />
           ) : (
             /* Media Catalog & Search View */
-            <div className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-6 lg:p-8 space-y-6">
+            <div className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-6 lg:p-8 space-y-5">
               {/* Category & Status Bar */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-3 border-b border-slate-800/80">
                 <div className="flex items-center gap-2.5">
                   <TrendingUp className="w-5 h-5 text-violet-400" />
                   <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white capitalize">
-                    {searchQuery ? `Search: "${searchQuery}"` : `${activeTab} on ${activeProvider}`}
+                    {searchQuery ? `Search: "${searchQuery}"` : `${activeProvider} Catalog`}
                   </h1>
                   {!loadingPosts && (
                     <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
@@ -235,6 +296,31 @@ export const App: React.FC = () => {
                 </div>
               </div>
 
+              {/* Dynamic Catalog Categories Filter Bar */}
+              {categories.length > 1 && !searchQuery && (
+                <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-2 pt-1 -mx-1 px-1">
+                  {categories.map((cat, idx) => {
+                    const isActive = activeCategoryFilter === cat.filter;
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          setActiveCategoryFilter(cat.filter);
+                          setPage(1);
+                        }}
+                        className={`px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all duration-200 flex items-center gap-1.5 ${
+                          isActive
+                            ? "bg-violet-600 text-white shadow-lg shadow-violet-600/30 scale-100"
+                            : "bg-slate-900/80 text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800/80"
+                        }`}
+                      >
+                        <span>{cat.title}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Error Message */}
               {error && (
                 <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-800/60 flex items-start gap-3 text-rose-200">
@@ -243,7 +329,7 @@ export const App: React.FC = () => {
                     <p className="font-semibold">{error}</p>
                     <p className="text-xs text-slate-400 mt-1">
                       Try clicking "Change Provider" in the sidebar to choose another active source like{" "}
-                      <span className="text-violet-400 font-mono">autoEmbed, flixhq, vega, filmyfly</span>.
+                      <span className="text-violet-400 font-mono">vega, autoEmbed, flixhq, filmyfly</span>.
                     </p>
                   </div>
                 </div>

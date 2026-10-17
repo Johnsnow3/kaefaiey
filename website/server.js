@@ -618,6 +618,90 @@ app.get("/api/:provider/meta", async (req, res) => {
   }
 });
 
+// ─── Stream Proxy Endpoint (MUST be before /api/:provider/stream) ─────────
+app.options("/api/proxy/stream", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.sendStatus(204);
+});
+
+app.all("/api/proxy/stream", async (req, res) => {
+  if (req.method === "OPTIONS") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    return res.sendStatus(204);
+  }
+
+  const { url, referer } = req.query;
+  if (!url) {
+    return res.status(400).json({ error: "Query parameter 'url' is required." });
+  }
+
+  try {
+    const targetUrl = String(url);
+    let originReferer = referer ? String(referer) : "";
+    try {
+      const parsed = new URL(targetUrl);
+      if (!originReferer) originReferer = `${parsed.protocol}//${parsed.host}/`;
+    } catch {}
+
+    const reqHeaders = {
+      "User-Agent": defaultBrowserHeaders["User-Agent"],
+      Referer: originReferer || targetUrl,
+      Accept: "*/*",
+      "Accept-Encoding": "identity",
+    };
+
+    if (req.headers.range) {
+      reqHeaders["Range"] = req.headers.range;
+    }
+
+    const streamRes = await axios({
+      method: req.method === "HEAD" ? "head" : "get",
+      url: targetUrl,
+      responseType: "stream",
+      headers: reqHeaders,
+      timeout: 35000,
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+
+    res.status(streamRes.status);
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+
+    const forwardHeaders = [
+      "content-type",
+      "content-length",
+      "content-range",
+      "accept-ranges",
+      "content-disposition",
+    ];
+
+    forwardHeaders.forEach((h) => {
+      if (streamRes.headers[h]) {
+        res.setHeader(h, streamRes.headers[h]);
+      }
+    });
+
+    if (!streamRes.headers["accept-ranges"]) {
+      res.setHeader("Accept-Ranges", "bytes");
+    }
+
+    if (req.method === "HEAD") {
+      return res.end();
+    }
+
+    streamRes.data.pipe(res);
+  } catch (err) {
+    console.error("[Stream Proxy Error]:", err.message);
+    res.status(502).json({ error: `Stream proxy failed: ${err.message}` });
+  }
+});
+
 // 5. Stream Endpoint
 app.get("/api/:provider/stream", async (req, res) => {
   const provider = providers[req.params.provider];
@@ -686,41 +770,6 @@ app.get("/api/:provider/stream", async (req, res) => {
       return res.status(408).json({ error: "Stream extraction timed out after 60s." });
     }
     res.status(500).json({ error: err.message || "Failed to extract stream" });
-  }
-});
-
-// Stream Proxy Endpoint (bypasses CORS & anti-hotlinking referer blocks for players/browsers)
-app.get("/api/proxy/stream", async (req, res) => {
-  const { url, referer } = req.query;
-  if (!url) {
-    return res.status(400).json({ error: "Query parameter 'url' is required." });
-  }
-
-  try {
-    const targetUrl = String(url);
-    const streamRes = await axios({
-      method: "get",
-      url: targetUrl,
-      responseType: "stream",
-      headers: {
-        "User-Agent": defaultBrowserHeaders["User-Agent"],
-        Referer: referer ? String(referer) : targetUrl,
-        Accept: "*/*",
-        Range: req.headers.range || "bytes=0-",
-      },
-      timeout: 30000,
-    });
-
-    res.status(streamRes.status);
-    Object.entries(streamRes.headers).forEach(([k, v]) => {
-      if (k.toLowerCase() !== "transfer-encoding") {
-        res.setHeader(k, v);
-      }
-    });
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    streamRes.data.pipe(res);
-  } catch (err) {
-    res.status(500).json({ error: `Stream proxy failed: ${err.message}` });
   }
 });
 
