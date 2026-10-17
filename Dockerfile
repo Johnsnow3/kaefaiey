@@ -2,13 +2,14 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Install build dependencies and Chromium for headless WAF challenge solver
+# Install build dependencies, Chromium for headless WAF challenge solver, and FFmpeg for video streaming
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
     ca-certificates \
     chromium \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CHROME_PATH=/usr/bin/chromium

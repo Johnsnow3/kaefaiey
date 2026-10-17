@@ -118,6 +118,14 @@ async function build() {
 
     fs.writeFileSync(path.join(__dirname, "website", "public", "index.html"), htmlContent);
     console.log("[Client Build] ✓ Successfully generated website/public/index.html");
+
+    // Mirror to root public/ for safety & backwards compatibility
+    const rootPublicDir = path.join(__dirname, "public");
+    if (fs.existsSync(rootPublicDir)) {
+      fs.copyFileSync(path.join(__dirname, "website", "public", "app.js"), path.join(rootPublicDir, "app.js"));
+      fs.writeFileSync(path.join(rootPublicDir, "index.html"), htmlContent);
+      console.log("[Client Build] ✓ Mirrored bundle to root public/");
+    }
   } catch (err) {
     console.error("[Client Build] ✗ Build failed:", err);
     process.exit(1);

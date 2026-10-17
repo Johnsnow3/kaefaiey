@@ -128,11 +128,43 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
     setExtractingStream(true);
     setStreamError(null);
 
-    const linkToExtract =
-      targetLink ||
-      meta?.linkList?.[0]?.directLinks?.[0]?.link ||
-      meta?.linkList?.[0]?.episodesLink ||
-      item.link;
+    let linkToExtract = targetLink;
+    let titleToPlay = customTitle;
+
+    // For TV series, if user clicks Watch Now without selecting an episode, play Episode 1
+    if (!linkToExtract) {
+      if (isSeries) {
+        let currentEpisodes = episodes;
+        if (currentEpisodes.length === 0 && meta?.linkList) {
+          const firstWithEpisodes = meta.linkList.find((l) => l.episodesLink);
+          if (firstWithEpisodes?.episodesLink) {
+            try {
+              setLoadingEpisodes(true);
+              currentEpisodes = await fetchEpisodes(provider, firstWithEpisodes.episodesLink);
+              setEpisodes(currentEpisodes);
+            } catch (err) {
+              console.warn("Auto-fetching episodes failed:", err);
+            } finally {
+              setLoadingEpisodes(false);
+            }
+          }
+        }
+
+        if (currentEpisodes && currentEpisodes.length > 0) {
+          linkToExtract = currentEpisodes[0].link;
+          if (!titleToPlay) {
+            titleToPlay = `${item.title} - ${currentEpisodes[0].title || "Episode 1"}`;
+          }
+        }
+      }
+
+      if (!linkToExtract) {
+        linkToExtract =
+          meta?.linkList?.[0]?.directLinks?.[0]?.link ||
+          meta?.linkList?.[0]?.episodesLink ||
+          item.link;
+      }
+    }
 
     try {
       const mediaType = isSeries ? "series" : "movie";
@@ -147,7 +179,7 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
       onPlay(
         streams[0],
         streams,
-        customTitle || item.title,
+        titleToPlay || customTitle || item.title,
         meta?.image || item.image
       );
     } catch (err: any) {
@@ -361,16 +393,23 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
                         </div>
                       ) : (
                         <button
-                          onClick={() =>
-                            handleStartPlay(
-                              linkGroup.episodesLink || item.link,
-                              `${item.title} - ${linkGroup.title}`
-                            )
-                          }
+                          onClick={() => {
+                            if (isSeries && episodes.length > 0) {
+                              handleStartPlay(
+                                episodes[0].link,
+                                `${item.title} - ${linkGroup.title || episodes[0].title || "Episode 1"}`
+                              );
+                            } else {
+                              handleStartPlay(
+                                linkGroup.episodesLink || item.link,
+                                `${item.title} - ${linkGroup.title}`
+                              );
+                            }
+                          }}
                           className="w-full py-1.5 text-xs rounded-lg bg-slate-700/60 hover:bg-violet-600 text-slate-200 hover:text-white font-medium transition-colors flex items-center justify-center gap-1.5"
                         >
                           <Play className="w-3 h-3 fill-current" />
-                          Stream This Link
+                          {isSeries ? "Play Episode 1" : "Stream This Link"}
                         </button>
                       )}
                     </div>

@@ -162,8 +162,21 @@ export function encodeLink(value: PlaybackLink): string {
   return JSON.stringify(value);
 }
 
-export function decodeLink(value: string): PlaybackLink {
-  return JSON.parse(value) as PlaybackLink;
+export function decodeLink(value: string | any): PlaybackLink {
+  if (typeof value === "object" && value !== null) return value as PlaybackLink;
+  try {
+    return JSON.parse(value) as PlaybackLink;
+  } catch {
+    try {
+      return JSON.parse(decodeURIComponent(value)) as PlaybackLink;
+    } catch {
+      return {
+        subjectId: String(value || ""),
+        detailPath: "",
+        language: "Original",
+      };
+    }
+  }
 }
 
 export function detailPath(link: string): string {

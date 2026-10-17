@@ -12,6 +12,8 @@ import {
   Layers,
   Activity,
   Menu,
+  Play,
+  X,
 } from "lucide-react";
 import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
@@ -67,6 +69,12 @@ export const App: React.FC = () => {
     title: string;
     poster?: string;
   } | null>(null);
+
+  // M3U8 & Stream Player Tester states
+  const [isM3u8TesterOpen, setIsM3u8TesterOpen] = useState(false);
+  const [m3u8Url, setM3u8Url] = useState("");
+  const [m3u8Referer, setM3u8Referer] = useState("");
+  const [m3u8Title, setM3u8Title] = useState("");
 
   // Sync watchlist count
   const handleWatchlistChange = useCallback(() => {
@@ -215,10 +223,14 @@ export const App: React.FC = () => {
         activeTab={activeTab}
         onTabChange={handleTabChange}
         searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        onSearchSubmit={handleSearch}
         onSearch={handleSearch}
         onOpenSidebar={() => setIsSidebarOpen(true)}
         watchlistCount={watchlistCount}
+        activeProvider={activeProvider}
         activeProviderName={activeProvider}
+        onOpenM3u8Tester={() => setIsM3u8TesterOpen(true)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -440,6 +452,139 @@ export const App: React.FC = () => {
           poster={playingMedia.poster}
           onClose={() => setPlayingMedia(null)}
         />
+      )}
+
+      {/* Built-in M3U8 & Stream Player Tester Modal */}
+      {isM3u8TesterOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn">
+          <div className="fixed inset-0 -z-10" onClick={() => setIsM3u8TesterOpen(false)} />
+          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl p-6 text-slate-100 overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-violet-600/30 border border-violet-500/50 flex items-center justify-center text-violet-400">
+                  <Play className="w-4 h-4 fill-current" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">M3U8 & Stream Player</h3>
+                  <p className="text-xs text-slate-400">Play any .m3u8, .mp4, or .mkv stream with HLS & proxy</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsM3u8TesterOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!m3u8Url.trim()) return;
+                const url = m3u8Url.trim();
+                const isHls = url.includes(".m3u8") || url.includes("/hls/");
+                const isMkv = url.toLowerCase().includes(".mkv");
+                const streamItem: MediaStream = {
+                  server: "Custom M3U8 / Stream",
+                  link: url,
+                  type: isHls ? "m3u8" : isMkv ? "mkv" : "mp4",
+                  headers: m3u8Referer.trim() ? { Referer: m3u8Referer.trim() } : undefined,
+                };
+                setIsM3u8TesterOpen(false);
+                setPlayingMedia({
+                  stream: streamItem,
+                  allStreams: [streamItem],
+                  title: m3u8Title.trim() || (isHls ? "Custom M3U8 Stream" : "Custom Video Stream"),
+                });
+              }}
+              className="mt-4 space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Stream URL (.m3u8, .mp4, .mkv) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={m3u8Url}
+                  onChange={(e) => setM3u8Url(e.target.value)}
+                  placeholder="https://example.com/stream/playlist.m3u8"
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Custom Referer / Origin (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={m3u8Referer}
+                  onChange={(e) => setM3u8Referer(e.target.value)}
+                  placeholder="e.g. https://officialmoviebox.com/ or https://example.com/"
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Streams requiring CDN Referer headers are automatically routed through our server-side M3U8 proxy rewriter.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Custom Title (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={m3u8Title}
+                  onChange={(e) => setM3u8Title(e.target.value)}
+                  placeholder="e.g. My HLS Stream"
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <div className="pt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                <span className="text-[11px]">Quick Tests:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setM3u8Url("https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8");
+                    setM3u8Title("Big Buck Bunny (HLS)");
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-violet-300 text-[11px]"
+                >
+                  Big Buck Bunny (HLS)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setM3u8Url("https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4");
+                    setM3u8Title("Big Buck Bunny (MP4)");
+                  }}
+                  className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 text-[11px]"
+                >
+                  MP4 Sample
+                </button>
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setIsM3u8TesterOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-violet-600/30 flex items-center gap-1.5"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  Stream Now
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

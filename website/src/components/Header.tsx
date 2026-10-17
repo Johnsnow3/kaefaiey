@@ -10,14 +10,17 @@ import {
 } from "lucide-react";
 
 interface HeaderProps {
-  activeTab: "home" | "movies" | "series" | "anime" | "watchlist";
-  onTabChange: (tab: "home" | "movies" | "series" | "anime" | "watchlist") => void;
+  activeTab: any;
+  onTabChange: (tab: any) => void;
   searchQuery: string;
-  onSearchChange: (q: string) => void;
-  onSearchSubmit: (q: string) => void;
-  activeProvider: string;
+  onSearchChange?: (q: string) => void;
+  onSearchSubmit?: (q: string) => void;
+  onSearch?: (q: string) => void;
+  activeProvider?: string;
+  activeProviderName?: string;
   onOpenSidebar: () => void;
   watchlistCount: number;
+  onOpenM3u8Tester?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,16 +29,26 @@ export const Header: React.FC<HeaderProps> = ({
   searchQuery,
   onSearchChange,
   onSearchSubmit,
+  onSearch,
   activeProvider,
+  activeProviderName,
   onOpenSidebar,
   watchlistCount,
+  onOpenM3u8Tester,
 }) => {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const providerDisplay = activeProvider || activeProviderName || "vega";
+
+  const handleQueryChange = (val: string) => {
+    if (onSearchChange) onSearchChange(val);
+    else if (onSearch) onSearch(val);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      onSearchSubmit(searchQuery.trim());
+      if (onSearchSubmit) onSearchSubmit(searchQuery.trim());
+      else if (onSearch) onSearch(searchQuery.trim());
     }
   };
 
@@ -117,7 +130,7 @@ export const Header: React.FC<HeaderProps> = ({
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
+              onChange={(e) => handleQueryChange(e.target.value)}
               placeholder="Search movies, anime, series..."
               className="w-56 lg:w-72 pl-9 pr-4 py-1.5 rounded-xl bg-white/[0.06] border border-white/[0.08] text-sm text-white placeholder-gray-400 focus:outline-none focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/80 transition-all"
             />
@@ -140,10 +153,23 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <span className="text-gray-400 hidden xl:inline">Source:</span>
             <span className="text-cyan-300 font-mono tracking-tight font-bold group-hover:underline">
-              {activeProvider}
+              {providerDisplay}
             </span>
             <Layers className="w-3.5 h-3.5 text-gray-400 group-hover:text-indigo-400 transition-colors" />
           </button>
+
+          {/* M3U8 Player Launcher */}
+          {onOpenM3u8Tester && (
+            <button
+              onClick={onOpenM3u8Tester}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/40 border border-violet-500/40 hover:border-violet-500 text-xs font-semibold text-violet-200 hover:text-white transition-all shadow-sm"
+              title="Built-in M3U8 & Stream Player"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-violet-400 animate-pulse" />
+              <span className="hidden sm:inline">M3U8 Player</span>
+              <span className="sm:hidden">M3U8</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -156,7 +182,7 @@ export const Header: React.FC<HeaderProps> = ({
               type="text"
               autoFocus
               value={searchQuery}
-              onChange={(e) => onSearchChange(e.target.value)}
+              onChange={(e) => handleQueryChange(e.target.value)}
               placeholder="Search titles, actors, genres..."
               className="w-full pl-9 pr-4 py-2 rounded-xl bg-white/[0.08] border border-white/[0.1] text-sm text-white placeholder-gray-400 focus:outline-none focus:border-cyan-400"
             />

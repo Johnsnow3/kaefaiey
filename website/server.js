@@ -5,6 +5,31 @@ const fs = require("fs");
 const os = require("os");
 const axios = require("axios");
 const cheerio = require("cheerio");
+
+// ─── Log Rate Limiter (Protects against Railway 500 logs/sec limit) ─────────
+const origLog = console.log;
+const origWarn = console.warn;
+const origError = console.error;
+let logsThisSec = 0;
+let lastLogReset = Date.now();
+
+function canLog() {
+  const now = Date.now();
+  if (now - lastLogReset > 1000) {
+    lastLogReset = now;
+    logsThisSec = 0;
+  }
+  if (logsThisSec < 15) {
+    logsThisSec++;
+    return true;
+  }
+  return false;
+}
+
+console.log = (...args) => { if (canLog()) origLog(...args); };
+console.warn = (...args) => { if (canLog()) origWarn(...args); };
+console.error = (...args) => { if (canLog()) origError(...args); };
+
 const { PersistentKvStore } = require("./kvStore");
 const {
   cleanPost,
@@ -327,16 +352,20 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// Request logging middleware
+// Request logging middleware (silences video chunks, proxy, healthchecks, and assets)
 app.use((req, res, next) => {
   const start = Date.now();
   res.on("finish", () => {
     const duration = Date.now() - start;
     if (
+      !req.url.startsWith("/api/proxy") &&
+      !req.url.startsWith("/api/health") &&
       !req.url.startsWith("/assets") &&
       !req.url.endsWith(".css") &&
       !req.url.endsWith(".js") &&
-      !req.url.endsWith(".ico")
+      !req.url.endsWith(".ico") &&
+      !req.url.endsWith(".ts") &&
+      !req.url.endsWith(".m3u8")
     ) {
       console.log(`[HTTP] ${req.method} ${req.url} ${res.statusCode} (${duration}ms)`);
     }
@@ -658,6 +687,49 @@ app.all("/api/proxy/stream", async (req, res) => {
       reqHeaders["Range"] = req.headers.range;
     }
 
+    // ─── M3U8 HLS Master/Media Playlist Proxy & Rewriter ───────────────────
+    const isM3u8Url = targetUrl.toLowerCase().includes(".m3u8") || targetUrl.toLowerCase().includes("/m3u8");
+    if (isM3u8Url && req.method !== "HEAD") {
+      try {
+        const m3u8Res = await axios({
+          method: "get",
+          url: targetUrl,
+          responseType: "text",
+          headers: reqHeaders,
+          timeout: 25000,
+          validateStatus: (s) => s >= 200 && s < 400,
+        });
+
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
+
+        const lines = String(m3u8Res.data).split("\n");
+        const rewritten = lines.map((line) => {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith("#")) {
+            // Rewrite URI in encryption keys e.g. #EXT-X-KEY:METHOD=AES-128,URI="..."
+            if (trimmed.startsWith("#EXT-X-KEY:") && trimmed.includes('URI="')) {
+              return trimmed.replace(/URI="([^"]+)"/, (_, keyUri) => {
+                let absKey = keyUri;
+                try { absKey = new URL(keyUri, targetUrl).href; } catch {}
+                return `URI="/api/proxy/stream?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(originReferer)}"`;
+              });
+            }
+            return line;
+          }
+          let absSeg = trimmed;
+          try { absSeg = new URL(trimmed, targetUrl).href; } catch {}
+          return `/api/proxy/stream?url=${encodeURIComponent(absSeg)}&referer=${encodeURIComponent(originReferer)}`;
+        });
+
+        return res.send(rewritten.join("\n"));
+      } catch (m3u8Err) {
+        // Fall back to direct stream pipe below if text fetch fails
+      }
+    }
+
+    // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS) ─────────────────
     const streamRes = await axios({
       method: req.method === "HEAD" ? "head" : "get",
       url: targetUrl,
@@ -687,6 +759,16 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     });
 
+    // Ensure browser recognises video if upstream sent octet-stream
+    const currType = (streamRes.headers["content-type"] || "").toLowerCase();
+    if (!currType || currType.includes("octet-stream")) {
+      if (targetUrl.toLowerCase().includes(".mkv")) {
+        res.setHeader("Content-Type", "video/mp4");
+      } else if (targetUrl.toLowerCase().includes(".mp4")) {
+        res.setHeader("Content-Type", "video/mp4");
+      }
+    }
+
     if (!streamRes.headers["accept-ranges"]) {
       res.setHeader("Accept-Ranges", "bytes");
     }
@@ -695,9 +777,23 @@ app.all("/api/proxy/stream", async (req, res) => {
       return res.end();
     }
 
+    req.on("close", () => {
+      try { streamRes.data.destroy(); } catch {}
+    });
+
     streamRes.data.pipe(res);
   } catch (err) {
-    console.error("[Stream Proxy Error]:", err.message);
+    // Silently ignore client aborts / normal player seek closes so Railway logs aren't spammed
+    if (
+      err.code === "ECONNRESET" ||
+      err.code === "ERR_CANCELED" ||
+      err.code === "ECONNABORTED" ||
+      err.message?.includes("aborted") ||
+      err.message?.includes("premature close") ||
+      res.writableEnded
+    ) {
+      return;
+    }
     res.status(502).json({ error: `Stream proxy failed: ${err.message}` });
   }
 });

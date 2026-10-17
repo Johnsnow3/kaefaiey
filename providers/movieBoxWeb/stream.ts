@@ -112,11 +112,15 @@ export const getStream = async function ({
       Origin: baseUrl,
       "User-Agent": userAgent,
     };
+    const isSeries = Boolean(playback.season || (playback.seasons && playback.seasons.length > 0));
+    const season = playback.season ?? (playback.seasons?.[0]?.se ?? 1);
+    const episode = playback.episode ?? 1;
+
     const watchParams = new URLSearchParams({
       id: playback.subjectId,
       type: "/movie/detail",
-      detailSe: playback.season ? String(playback.season) : "",
-      detailEp: playback.episode ? String(playback.episode) : "",
+      detailSe: isSeries ? String(season) : "",
+      detailEp: isSeries ? String(episode) : "",
       lang: "en",
     });
     const referer = absoluteUrl(
@@ -127,9 +131,9 @@ export const getStream = async function ({
       subjectId: playback.subjectId,
       detailPath: playback.detailPath,
     });
-    if (playback.season && playback.episode) {
-      playParams.set("se", String(playback.season));
-      playParams.set("ep", String(playback.episode));
+    if (isSeries) {
+      playParams.set("se", String(season));
+      playParams.set("ep", String(episode));
     }
 
     const playUrl = absoluteUrl(

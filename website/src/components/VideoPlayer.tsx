@@ -104,8 +104,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!videoRef.current || !activeStream?.link) return;
     const video = videoRef.current;
     const streamUrl = activeStream.link;
-    const isM3u8 = streamUrl.includes(".m3u8") || activeStream.type === "m3u8";
+    const isM3u8 = streamUrl.includes(".m3u8") || activeStream.type === "m3u8" || streamUrl.includes("/hls/");
     const isMkv = streamUrl.toLowerCase().includes(".mkv") || activeStream.type === "mkv";
+    const hasCustomReferer = Boolean(activeStream.headers?.Referer);
 
     setPlaybackNotice(null);
     triedProxyRef.current = false;
@@ -116,22 +117,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hlsRef.current = null;
     }
 
-    // Browsers cannot decode MKV containers natively
-    if (isMkv) {
-      setPlaybackNotice(
-        "MKV Format Detected — Web browsers cannot decode MKV video containers natively. Use 1-Click Launch below for instant playback in VLC or MX Player, or download directly."
-      );
-      return;
-    }
-
     if (isM3u8 && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
         backBufferLength: 90,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 600,
       });
 
-      hls.loadSource(streamUrl);
+      // If provider requires custom referer (e.g. MovieBoxWeb), proxy playlist immediately
+      const initialHlsUrl = hasCustomReferer
+        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer)
+        : streamUrl;
+
+      hls.loadSource(initialHlsUrl);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -162,6 +162,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 triedProxyRef.current = true;
                 const proxied = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
                 hls.loadSource(proxied);
+                hls.startLoad();
               } else {
                 hls.startLoad();
               }
@@ -170,10 +171,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               hls.recoverMediaError();
               break;
             default:
-              setPlaybackNotice(
-                "Unable to play stream directly in browser. Try opening in VLC, MX Player, or choosing another server."
-              );
-              hls.destroy();
+              if (!triedProxyRef.current && !streamUrl.includes("/api/proxy/")) {
+                triedProxyRef.current = true;
+                const proxied = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
+                hls.loadSource(proxied);
+                hls.startLoad();
+              } else {
+                setPlaybackNotice(
+                  "Unable to decode stream directly in browser. Try opening in VLC, MX Player, or choosing another server."
+                );
+                hls.destroy();
+              }
               break;
           }
         }
@@ -181,17 +189,24 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       hlsRef.current = hls;
     } else {
-      // Native video playback (MP4 or Safari native HLS)
-      video.src = streamUrl;
+      // Native video playback (MP4 or Safari native HLS or MKV)
+      // MKV or streams with custom Referer route through stream proxy for clean byte-range & MIME headers
+      const initialSrc = hasCustomReferer || isMkv
+        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer)
+        : streamUrl;
+
+      video.src = initialSrc;
       video.onerror = () => {
-        if (!triedProxyRef.current && !streamUrl.includes("/api/proxy/")) {
-          console.log("[Video] Direct play failed (likely CORS), retrying via stream proxy...");
+        if (!triedProxyRef.current && !initialSrc.includes("/api/proxy/")) {
+          console.log("[Video] Direct play failed, retrying via stream proxy...");
           triedProxyRef.current = true;
           video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
           video.play().catch(() => {});
         } else {
           setPlaybackNotice(
-            "Video stream cannot be decoded directly by the browser. Launch with 1-click in VLC / MX Player or use Direct Download."
+            isMkv
+              ? "MKV Stream Notice: Your browser could not decode this specific MKV video container. Use 1-Click Launch below for instant playback in VLC or MX Player, or download directly."
+              : "Video stream cannot be decoded directly by the browser. Launch with 1-click in VLC / MX Player or use Direct Download."
           );
         }
       };
