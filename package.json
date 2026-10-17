@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node website/server.js",
     "dev": "node website/server.js",
-    "build": "node build-bundled.js",
+    "build": "node build-bundled.js && node build-client.js",
+    "build:client": "node build-client.js",
     "build:start": "npm run build && npm start",
     "test": "node tests/test-providers.js",
     "test:provider": "node tests/test-provider.js",
@@ -28,11 +29,17 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "axios": "^1.10.0",
     "cheerio": "^1.1.0",
     "cors": "^2.8.5",
     "curl-cffi-node": "^0.1.8",
     "express": "^4.21.2",
+    "hls.js": "^1.7.3",
+    "lucide-react": "^1.59.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "rimraf": "^6.0.1",
     "tls-impersonate": "^0.1.0",
     "zod": "^4.0.2"

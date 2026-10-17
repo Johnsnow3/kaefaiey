@@ -857,6 +857,11 @@ app.post("/api/reload", (req, res) => {
 // ─── Static Dist Access (if needed by React Native app) ─────────────────────
 app.use("/dist", express.static(distDir));
 
+// ─── API Documentation & Playground ─────────────────────────────────────────
+app.get("/docs", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "docs.html"));
+});
+
 // ─── SPA Route Fallback ──────────────────────────────────────────────────────
 app.get("*", (req, res) => {
   if (req.path.startsWith("/api/")) {
