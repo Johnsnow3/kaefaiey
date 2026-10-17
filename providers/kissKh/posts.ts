@@ -58,10 +58,22 @@ export const getSearchPosts = async function ({
   const baseUrl = await getBaseUrl("kissKh");
   const url = `${baseUrl}/api/DramaList/Search?q=${searchQuery}&type=0`;
   try {
-    const res = await axios.get(url, { signal });
-    const data = res.data;
+    const res = await axios.get(url, {
+      signal,
+      headers: {
+        ...(providerContext.commonHeaders || {}),
+        Referer: `${baseUrl}/`,
+      },
+    });
+    const items = Array.isArray(res.data)
+      ? res.data
+      : Array.isArray(res.data?.data)
+      ? res.data.data
+      : Array.isArray(res.data?.items)
+      ? res.data.items
+      : [];
     const catalog: Post[] = [];
-    data?.map((element: any) => {
+    items.forEach((element: any) => {
       const title = element.title;
       const link = baseUrl + `/api/DramaList/Drama/${element?.id}?isq=false`;
       const image = element.thumbnail;
@@ -80,7 +92,7 @@ export const getSearchPosts = async function ({
     });
     return catalog;
   } catch (err) {
-    console.error("kiss error ", err);
+    console.error("kiss search error ", err);
     return [];
   }
 };

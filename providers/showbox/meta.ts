@@ -46,9 +46,19 @@ export const getMeta = async function ({
       fileList.map((file: any) => {
         const fileName = `${file.file_name} (${file.file_size})`;
         const fileId = file.fid;
+        const linkStr = `${febKey}&${fileId}`;
         links.push({
           title: fileName,
-          episodesLink: file.is_dir ? `${febKey}&${fileId}` : `${febKey}&`,
+          episodesLink: linkStr,
+          directLinks: !file.is_dir
+            ? [
+                {
+                  title: fileName,
+                  link: linkStr,
+                  type: type as "movie" | "series",
+                },
+              ]
+            : undefined,
         });
       });
     }

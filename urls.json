@@ -5,7 +5,7 @@
   },
   "Topmovies": {
     "name": "Topmovies",
-    "url": "https://moviesleech.club"
+    "url": "https://topmovies.lat"
   },
   "UhdMovies": {
     "name": "UhdMovies",
@@ -29,7 +29,11 @@
   },
   "w4u": {
     "name": "world4ufree",
-    "url": "https://world4ufree.beer"
+    "url": "https://world4ufree.vip"
+  },
+  "world4u": {
+    "name": "world4ufree",
+    "url": "https://world4ufree.vip"
   },
   "extra": {
     "name": "extraMovies",
@@ -41,7 +45,7 @@
   },
   "kat": {
     "name": "katmovieshd",
-    "url": "https://new.katmoviehd.top"
+    "url": "https://katmoviehd.ngo"
   },
   "tokyoinsider": {
     "name": "tokyoinsider",
@@ -49,7 +53,7 @@
   },
   "nfMirror": {
     "name": "nfMirror",
-    "url": "https://net77.cc"
+    "url": "https://net52.cc"
   },
   "movieBoxWeb": {
     "name": "MovieBox Web",
@@ -133,7 +137,7 @@
   },
   "movies4u": {
     "name": "movies4u",
-    "url": "https://movies4u.cr"
+    "url": "https://movies4u.vip"
   },
   "joya9tv": {
     "name": "joya9tv1",
@@ -157,7 +161,7 @@
   },
   "kickAssAnime": {
     "name": "kickAssAnime",
-    "url": "https://kaa.lt"
+    "url": "https://kickassanime.am"
   },
   "castle": {
     "name": "Castle TV",
@@ -173,11 +177,11 @@
   },
   "movielinkdb": {
     "name": "movielinkbd",
-    "url": "https://ex5wfv.movielinkbd.li"
+    "url": "https://movielinkbd.li"
   },
   "movielinkbd": {
     "name": "movielinkbd",
-    "url": "https://ex5wfv.movielinkbd.li"
+    "url": "https://movielinkbd.li"
   },
   "mxplayer": {
     "name": "mxplayer",
@@ -190,5 +194,21 @@
   "asianc": {
     "name": "AsianC",
     "url": "https://asianc.id"
+  },
+  "vadapav": {
+    "name": "vadapav",
+    "url": "https://vadapav.mov"
+  },
+  "consumet": {
+    "name": "consumet",
+    "url": "https://consumet.delusionz.xyz"
+  },
+  "dooflix": {
+    "name": "dooflix",
+    "url": "https://dooflix.app"
+  },
+  "ogomovies": {
+    "name": "ogomovies",
+    "url": "https://ogomovies.lat"
   }
 }

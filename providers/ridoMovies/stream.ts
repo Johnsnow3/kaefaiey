@@ -1,4 +1,5 @@
 import { ProviderContext, Stream } from "../types";
+import { getBaseUrl } from "../getBaseUrl";
 
 export const getStream = async ({
   link: data,
@@ -9,32 +10,57 @@ export const getStream = async ({
 }): Promise<Stream[]> => {
   try {
     const { cheerio, commonHeaders: headers, axios } = providerContext;
-    const streamData = JSON.parse(data);
-    const streamLinks: Stream[] = [];
+    let streamData: any = {};
+    try {
+      streamData = JSON.parse(data);
+    } catch {
+      streamData = { link: data };
+    }
 
-    // const path =
-    //   streamData?.type === 'movie'
-    //     ? `/${streamData?.slug}`
-    //     : `/${streamData?.slug}/season-${streamData?.season}/episode-${streamData?.episode}`;
-    // const url = streamData?.baseUrl + path;
-    // console.log('all', url);
-    // const res = await axios.get(url, {headers});
-    // const postId = res.data.split('\\"postid\\":\\"')[1].split('\\"')[0];
-    // console.log('rido post id', postId);
+    const baseUrl =
+      streamData?.baseUrl ||
+      (await getBaseUrl("ridomovies").catch(() => "")) ||
+      "https://ridomovies.tv";
 
-    const url = streamData?.baseUrl + "/api/" + streamData?.slug;
+    let slug = streamData?.slug || "";
+
+    if (!slug) {
+      const imdbMatch = String(data).match(/tt\d+/);
+      const query = imdbMatch
+        ? imdbMatch[0]
+        : String(data).replace(/^https?:\/\/[^/]+\//, "").replace(/^\/+/, "").split("/")[0];
+      if (query) {
+        try {
+          const searchRes = await axios.get(
+            `${baseUrl}/core/api/search?q=${encodeURIComponent(query)}`,
+            { headers }
+          );
+          slug = searchRes.data?.data?.items?.[0]?.fullSlug || "";
+        } catch {}
+      }
+    }
+
+    if (!slug) return [];
+
+    const url = `${baseUrl}/api/${slug}`;
     console.log("rido url", url);
 
     const res = await axios.get(url, { headers });
-    const iframe = res.data.data?.[0]?.url;
+    const iframe = res.data?.data?.[0]?.url || "";
+    if (!iframe) return [];
 
-    console.log("rido data", iframe);
-    const iframeUrl = iframe.split('src="')[1].split('"')[0];
-    console.log("rido iframeUrl", iframeUrl);
+    let iframeUrl = "";
+    if (iframe.includes('src="')) {
+      iframeUrl = iframe.split('src="')[1].split('"')[0];
+    } else if (iframe.startsWith("http")) {
+      iframeUrl = iframe;
+    }
+    if (!iframeUrl) return [];
+
     const iframeRes = await axios.get(iframeUrl, {
       headers: {
         ...headers,
-        Referer: streamData?.baseUrl,
+        Referer: baseUrl,
       },
     });
     const $ = cheerio.load(iframeRes.data);

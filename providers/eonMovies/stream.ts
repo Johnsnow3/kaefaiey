@@ -59,7 +59,7 @@ function getDotflixSharingCode(value: string): string {
 
 function isHubcloudUrl(value: string): boolean {
   try {
-    return /(?:^|\.)hubcloud\./i.test(new URL(value).hostname);
+    return /(?:^|\.)(?:hubcloud|tmbcloud|hubdrive|hblinks|vcloud)\./i.test(new URL(value).hostname);
   } catch {
     return false;
   }

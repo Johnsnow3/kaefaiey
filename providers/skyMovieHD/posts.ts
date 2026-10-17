@@ -96,15 +96,16 @@ async function fetchPosts({
     const catalog: Post[] = [];
 
     // ✅ Scrape posts
-    $("article.latestpost").each((_, el) => {
+    $("article.latestpost, article, .post, .latestpost, div.post, .entry, .card").each((_, el) => {
       const card = $(el);
 
       // Link
       let link =
         card
           .find(
-            "header.entry-header h2.entry-title a, header.entry-header h1.entry-title a",
+            "header.entry-header h2.entry-title a, header.entry-header h1.entry-title a, h2.entry-title a, .entry-title a, a[rel='bookmark'], a",
           )
+          .first()
           .attr("href") || "";
       if (!link) return;
       link = resolveUrl(link);
@@ -113,8 +114,9 @@ async function fetchPosts({
       // Title: remove "Download"
       let title = card
         .find(
-          "header.entry-header h2.entry-title a, header.entry-header h1.entry-title a",
+          "header.entry-header h2.entry-title a, header.entry-header h1.entry-title a, h2.entry-title a, .entry-title a, a[rel='bookmark'], a",
         )
+        .first()
         .text()
         .replace(/^Download\s*/i, "")
         .trim();
@@ -122,8 +124,8 @@ async function fetchPosts({
 
       // Image
       let img =
-        card.find("a#featured-thumbnail img").attr("data-src") ||
-        card.find("a#featured-thumbnail img").attr("src") ||
+        card.find("a#featured-thumbnail img, .post-thumbnail img, img").attr("data-src") ||
+        card.find("a#featured-thumbnail img, .post-thumbnail img, img").attr("src") ||
         "";
       const image = img ? resolveUrl(img) : "";
 

@@ -94,9 +94,20 @@ export const getSearchPosts = async ({
         posts.push(post);
       });
     }
+
+    if (!posts.length) {
+      const wpUrl = `${baseUrl}/page/${page}/?s=${encodeURIComponent(searchQuery)}`;
+      return await posts(baseUrl, wpUrl, signal, headers, axios, cheerio);
+    }
+
     return posts;
   } catch (error) {
-    throwProviderError("Vega", "search posts", error);
+    try {
+      const wpUrl = `${baseUrl}/page/${page}/?s=${encodeURIComponent(searchQuery)}`;
+      return await posts(baseUrl, wpUrl, signal, headers, axios, cheerio);
+    } catch {
+      throwProviderError("Vega", "search posts", error);
+    }
   }
 };
 

@@ -42,26 +42,213 @@ global.fetch = async (input, init) => {
 };
 
 // ─── Provider Context Setup ─────────────────────────────────────────────────
-const commonHeaders = {
+const crypto = require("crypto");
+
+const defaultBrowserHeaders = {
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Accept:
     "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.5",
+  "Accept-Language": "en-US,en;q=0.9",
+  "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"Windows"',
+  "Upgrade-Insecure-Requests": "1",
 };
+
+// Global axios request interceptor: ensure requests never send bare axios user-agent
+axios.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
+  const currentUa = config.headers["User-Agent"] || config.headers["user-agent"] || "";
+  if (!currentUa || currentUa.includes("axios")) {
+    config.headers["User-Agent"] = defaultBrowserHeaders["User-Agent"];
+  }
+  if (!config.headers["Accept"] && !config.headers["accept"]) {
+    config.headers["Accept"] = defaultBrowserHeaders["Accept"];
+  }
+  if (!config.headers["Accept-Language"] && !config.headers["accept-language"]) {
+    config.headers["Accept-Language"] = defaultBrowserHeaders["Accept-Language"];
+  }
+  return config;
+});
+
+const Aes = {
+  sha1: async (str) => crypto.createHash("sha1").update(str).digest("hex"),
+  sha256: async (str) => crypto.createHash("sha256").update(str).digest("hex"),
+  md5: async (str) => crypto.createHash("md5").update(str).digest("hex"),
+};
+
+async function solveWithPlaywright(url, options = {}) {
+  let browser;
+  try {
+    const { chromium } = require("playwright-core");
+    const launchArgs = [
+      "--disable-blink-features=AutomationControlled",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--headless=new",
+    ];
+
+    const executablePath =
+      process.env.CHROME_PATH ||
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+      (fs.existsSync("/usr/bin/chromium") ? "/usr/bin/chromium" : undefined) ||
+      (fs.existsSync("/usr/bin/chromium-browser") ? "/usr/bin/chromium-browser" : undefined) ||
+      (fs.existsSync("/usr/bin/google-chrome") ? "/usr/bin/google-chrome" : undefined);
+
+    const launchOpts = {
+      headless: true,
+      args: launchArgs,
+      ignoreDefaultArgs: ["--enable-automation"],
+    };
+    if (executablePath) {
+      launchOpts.executablePath = executablePath;
+    }
+
+    browser = await chromium.launch(launchOpts).catch(() =>
+      chromium.launch({ ...launchOpts, channel: "chrome" }).catch(() =>
+        chromium.launch({ ...launchOpts, channel: "msedge" })
+      )
+    );
+  } catch (err) {
+    throw new Error(
+      `Headless challenge solver unavailable (${err.message})`
+    );
+  }
+
+  const contextOptions = {
+    userAgent:
+      options.headers?.["User-Agent"] || defaultBrowserHeaders["User-Agent"],
+  };
+  const context = await browser.newContext(contextOptions);
+
+  await context.addInitScript(() => {
+    try {
+      delete Object.getPrototypeOf(navigator).webdriver;
+    } catch {}
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+  });
+
+  const page = await context.newPage();
+
+  return new Promise(async (resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      settled = true;
+    };
+
+    const finalize = async (data = "") => {
+      if (settled) return;
+      cleanup();
+      try {
+        const cookies = await context.cookies();
+        const cookieMap = {};
+        for (const c of cookies) {
+          cookieMap[c.name] = c.value;
+        }
+        const cookieStr = Object.entries(cookieMap)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("; ");
+        const pageUrl = page.url();
+        const userAgent = await page.evaluate(() => navigator.userAgent).catch(() => "");
+        await browser.close().catch(() => {});
+        resolve({
+          data: typeof data === "string" ? data : JSON.stringify(data),
+          cookies: cookieStr,
+          cookie: cookieStr,
+          cookieMap,
+          url: pageUrl,
+          userAgent,
+        });
+      } catch (err) {
+        await browser.close().catch(() => {});
+        reject(err);
+      }
+    };
+
+    const timeout = setTimeout(async () => {
+      if (!settled) {
+        cleanup();
+        await browser.close().catch(() => {});
+        reject(new Error("Cloudflare Turnstile challenge timed out"));
+      }
+    }, options.timeoutMs || 25000);
+
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    } catch {}
+
+    if (options.injectedJavaScript) {
+      try {
+        await page.evaluate(options.injectedJavaScript);
+      } catch {}
+    }
+
+    for (let s = 1; s <= 20; s++) {
+      if (settled) break;
+      await page.waitForTimeout(1000);
+      if (settled) break;
+
+      if (options.waitForCookie) {
+        try {
+          const cookies = await context.cookies();
+          const target = cookies.find((c) => c.name === options.waitForCookie);
+          if (target && target.value) {
+            clearTimeout(timeout);
+            finalize();
+            break;
+          }
+        } catch {}
+      }
+
+      try {
+        const token = await page.evaluate(() => {
+          let t = null;
+          if (window.turnstile) {
+            try { t = window.turnstile.getResponse(); } catch {}
+          }
+          if (!t) {
+            const inp = document.querySelector('input[name="cf-turnstile-response"]');
+            if (inp && inp.value && inp.value.length > 20) t = inp.value;
+          }
+          return t;
+        }).catch(() => null);
+
+        if (token) {
+          clearTimeout(timeout);
+          finalize(token);
+          break;
+        }
+      } catch {}
+    }
+
+    if (!settled) {
+      clearTimeout(timeout);
+      finalize();
+    }
+  });
+}
+
+const commonHeaders = defaultBrowserHeaders;
 
 const providerContext = {
   axios,
   cheerio,
   commonHeaders,
   kvStore,
-  openWebView: async () => {
-    throw new Error(
-      "openWebView is an interactive WebView dialog that requires a browser environment. It is bypassed in server API mode.",
-    );
+  openWebView: async (url, options = {}) => {
+    try {
+      return await solveWithPlaywright(url, options);
+    } catch (err) {
+      console.warn(`[WAF Solver] Bypass failed for ${url}: ${err.message}`);
+      throw new Error(`Cloudflare/WAF verification needed for upstream site: ${err.message}`);
+    }
   },
   getCookies: async () => ({}),
-  Aes: {},
+  Aes,
 };
 
 // ─── Provider Discovery & Registry ──────────────────────────────────────────
@@ -440,11 +627,18 @@ app.get("/api/:provider/stream", async (req, res) => {
       .json({ error: `Stream not supported by provider '${req.params.provider}'.` });
   }
 
-  const { link = "", type = "movie", download = "false", clean = "true" } = req.query;
+  let { link = "", type = "movie", download = "false", clean = "true" } = req.query;
   if (!link) {
     return res
       .status(400)
       .json({ error: "Query parameter 'link' is required." });
+  }
+
+  let rawLink = String(link).trim();
+  if (rawLink.startsWith("%7B") || rawLink.startsWith("%7b") || rawLink.startsWith("%22")) {
+    try {
+      rawLink = decodeURIComponent(rawLink);
+    } catch {}
   }
 
   try {
@@ -467,7 +661,7 @@ app.get("/api/:provider/stream", async (req, res) => {
     const timeout = setTimeout(() => controller.abort(), 60000);
 
     const streams = await getStream({
-      link: String(link),
+      link: rawLink,
       type: String(type),
       signal: controller.signal,
       providerContext,
@@ -492,6 +686,41 @@ app.get("/api/:provider/stream", async (req, res) => {
       return res.status(408).json({ error: "Stream extraction timed out after 60s." });
     }
     res.status(500).json({ error: err.message || "Failed to extract stream" });
+  }
+});
+
+// Stream Proxy Endpoint (bypasses CORS & anti-hotlinking referer blocks for players/browsers)
+app.get("/api/proxy/stream", async (req, res) => {
+  const { url, referer } = req.query;
+  if (!url) {
+    return res.status(400).json({ error: "Query parameter 'url' is required." });
+  }
+
+  try {
+    const targetUrl = String(url);
+    const streamRes = await axios({
+      method: "get",
+      url: targetUrl,
+      responseType: "stream",
+      headers: {
+        "User-Agent": defaultBrowserHeaders["User-Agent"],
+        Referer: referer ? String(referer) : targetUrl,
+        Accept: "*/*",
+        Range: req.headers.range || "bytes=0-",
+      },
+      timeout: 30000,
+    });
+
+    res.status(streamRes.status);
+    Object.entries(streamRes.headers).forEach(([k, v]) => {
+      if (k.toLowerCase() !== "transfer-encoding") {
+        res.setHeader(k, v);
+      }
+    });
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    streamRes.data.pipe(res);
+  } catch (err) {
+    res.status(500).json({ error: `Stream proxy failed: ${err.message}` });
   }
 });
 

@@ -16,10 +16,79 @@ function decodeHtmlEntities(str) {
     .replace(/&#038;/g, "&");
 }
 
+function isJsonString(str) {
+  if (typeof str !== "string") return false;
+  const trimmed = str.trim();
+  return (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+}
+
+function cleanEpisodeLink(rawLink, provider = "") {
+  if (!rawLink || typeof rawLink !== "string") return "";
+
+  const trimmed = rawLink.trim();
+
+  // If this is a JSON-encoded payload, parse and convert to a clean URL / clean identifier
+  if (isJsonString(trimmed)) {
+    try {
+      const parsed = JSON.parse(trimmed);
+
+      // 1. Ringz / Direct URL payload: { url: "https://...", server: "..." }
+      if (parsed.url && typeof parsed.url === "string" && parsed.url.startsWith("http")) {
+        return cleanUrl(parsed.url);
+      }
+
+      // 2. Anikoto payload: { slug, epNum, dataIds, ... }
+      if (parsed.slug && (parsed.epNum !== undefined || parsed.dataIds !== undefined)) {
+        const ep = parsed.epNum || "1";
+        const query = parsed.dataIds ? `?dataIds=${encodeURIComponent(parsed.dataIds)}` : "";
+        return `https://anikototv.to/watch/${parsed.slug}/ep-${ep}${query}`;
+      }
+
+      // 3. Torrentio / Cinemeta / Everything payload: { imdbId, season, episode, type, ... }
+      if (parsed.imdbId && String(parsed.imdbId).startsWith("tt")) {
+        const isSeries = parsed.type === "series" || Boolean(parsed.season || parsed.episode);
+        if (isSeries && (parsed.season || parsed.episode)) {
+          return `${parsed.imdbId}:${parsed.season || 1}:${parsed.episode || 1}`;
+        }
+        return parsed.imdbId;
+      }
+
+      // 4. AutoEmbed / Cinemeta with TMDB ID or IMDb
+      if (parsed.tmdbId || parsed.id) {
+        const idVal = parsed.imdbId || parsed.tmdbId || parsed.id;
+        const isSeries = parsed.type === "series" || Boolean(parsed.season || parsed.episode);
+        if (isSeries && (parsed.season || parsed.episode)) {
+          return `${idVal}:${parsed.season || 1}:${parsed.episode || 1}`;
+        }
+        return String(idVal);
+      }
+
+      // 5. AnimeSub / Kitsu / MAL payload: { malId, kitsuId, season, episode, ... }
+      if (parsed.malId || parsed.kitsuId) {
+        const idVal = parsed.malId ? `mal:${parsed.malId}` : `kitsu:${parsed.kitsuId}`;
+        if (parsed.season || parsed.episode) {
+          return `${idVal}:${parsed.season || 1}:${parsed.episode || 1}`;
+        }
+        return idVal;
+      }
+    } catch {
+      // If parsing fails, fall through to return normalized string without URL corruption
+      return trimmed;
+    }
+  }
+
+  return cleanUrl(rawLink);
+}
+
 function cleanUrl(rawUrl, baseUrl = "") {
   if (!rawUrl || typeof rawUrl !== "string") return "";
 
   let cleaned = decodeHtmlEntities(rawUrl.trim());
+
+  // Do not perform URL slash compression on JSON payloads
+  if (isJsonString(cleaned)) {
+    return cleaned;
+  }
 
   // Handle protocol-relative URLs
   if (cleaned.startsWith("//")) {
@@ -48,10 +117,8 @@ function cleanUrl(rawUrl, baseUrl = "") {
         cleaned = parsed.toString();
       }
     } else if (baseUrl && (baseUrl.startsWith("http://") || baseUrl.startsWith("https://"))) {
-      // If relative URL, construct full clean URL if desired
       try {
         const full = new URL(cleaned, baseUrl).toString();
-        // Return full clean URL or path as needed
       } catch (e) {}
     }
   } catch (err) {
@@ -109,13 +176,13 @@ function cleanMeta(meta) {
       const cleanedItem = {
         ...linkItem,
         title: decodeHtmlEntities(linkItem.title || "").trim(),
-        episodesLink: linkItem.episodesLink ? cleanUrl(linkItem.episodesLink) : undefined,
+        episodesLink: linkItem.episodesLink ? cleanEpisodeLink(linkItem.episodesLink) : undefined,
       };
       if (Array.isArray(linkItem.directLinks)) {
         cleanedItem.directLinks = linkItem.directLinks.map((dl) => ({
           ...dl,
           title: decodeHtmlEntities(dl.title || "").trim(),
-          link: cleanUrl(dl.link),
+          link: cleanEpisodeLink(dl.link),
           image: dl.image ? cleanUrl(dl.image) : undefined,
         }));
       }
@@ -131,7 +198,7 @@ function cleanEpisode(episode) {
   return {
     ...episode,
     title: decodeHtmlEntities(episode.title || "").trim(),
-    link: cleanUrl(episode.link),
+    link: cleanEpisodeLink(episode.link),
     image: episode.image ? cleanUrl(episode.image) : undefined,
     description: episode.description ? decodeHtmlEntities(episode.description).trim() : undefined,
   };
@@ -139,6 +206,7 @@ function cleanEpisode(episode) {
 
 module.exports = {
   cleanUrl,
+  cleanEpisodeLink,
   cleanPost,
   cleanStream,
   cleanMeta,

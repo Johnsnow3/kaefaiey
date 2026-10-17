@@ -2,13 +2,17 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# Install build dependencies if needed for native modules
+# Install build dependencies and Chromium for headless WAF challenge solver
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
     ca-certificates \
+    chromium \
     && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Copy dependency manifests
 COPY package.json package-lock.json* ./

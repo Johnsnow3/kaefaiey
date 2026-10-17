@@ -80,23 +80,28 @@ async function posts({
       signal,
     });
     const data = res.data;
+    let html = typeof data === "string" ? data : "";
     const regex = /\[(?=.*?"<div class")(.*?)\]/g;
-    const htmlArray = data?.match(regex);
-    const html = decodeHtml(JSON.parse(htmlArray[htmlArray.length - 1]));
+    const htmlArray = typeof data === "string" ? data.match(regex) : null;
+    if (htmlArray && htmlArray.length > 0) {
+      try {
+        html = decodeHtml(JSON.parse(htmlArray[htmlArray.length - 1]));
+      } catch {}
+    }
     const $ = cheerio.load(html);
     const catalog: Post[] = [];
-    $(".col.mb-4").map((i, element) => {
-      const title = $(element).find("h5").text();
-      const link = $(element).find("h5").find("a").attr("href");
+    $(".col.mb-4, .movie-card, .film-item, .card, article, .item").map((i, element) => {
+      const title = $(element).find("h5, .title, .film-name, h2, h3").first().text().trim();
+      const link = $(element).find("h5 a, a.film-poster, a").first().attr("href");
       const image =
         $(element).find("img").attr("data-src") ||
         $(element).find("img").attr("src") ||
         "";
-      if (title && link && image) {
+      if (title && link) {
         catalog.push({
           title: title,
           link: link,
-          image: image,
+          image: image || "",
         });
       }
     });

@@ -34,25 +34,49 @@ export const getStream = async function ({
   // ===============================
   else if (link.startsWith("http") && link.includes("mxplayer.in")) {
     try {
-      // ✔ Extract ID from URL
-      // https://www.mxplayer.in/detail/movie/<ID>
       const idMatch = link.match(/movie\/([a-zA-Z0-9]+)/);
-      if (idMatch && idMatch[1]) {
-        const id = idMatch[1];
+      const id = idMatch ? idMatch[1] : "";
 
-        const apiUrl =
-          `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}`;
+      const headers = {
+        Referer: "https://www.mxplayer.in/",
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      };
 
-        const res = await axios.get(apiUrl, {
-          headers: {
-            Referer: "https://www.mxplayer.in/",
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-          },
-        });
+      if (id) {
+        const endpointsToTry = [
+          `${API_URL}/detail/tab/overview?type=movie&id=${id}`,
+          `${API_URL}/detail/tab/movie?id=${id}`,
+          `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}`,
+        ];
 
-        // ✔ items[0].stream
-        streamObj = res.data?.items?.[0]?.stream || null;
+        for (const ep of endpointsToTry) {
+          try {
+            const res = await axios.get(ep, { headers });
+            if (res.data?.stream) {
+              streamObj = res.data.stream;
+              break;
+            }
+            if (res.data?.items?.[0]?.stream) {
+              streamObj = res.data.items[0].stream;
+              break;
+            }
+          } catch {}
+        }
+      }
+
+      // If API endpoints didn't return stream, scrape HTML page state
+      if (!streamObj) {
+        try {
+          const pageRes = await axios.get(link, { headers });
+          const html = typeof pageRes.data === "string" ? pageRes.data : "";
+          const streamMatch = html.match(/"stream"\s*:\s*(\{.+?\})\s*,\s*"(?:shareUrl|publisher|title|id)"/);
+          if (streamMatch) {
+            try {
+              streamObj = JSON.parse(streamMatch[1]);
+            } catch {}
+          }
+        } catch {}
       }
     } catch (e) {
       console.error("MX Movie API error", e);
