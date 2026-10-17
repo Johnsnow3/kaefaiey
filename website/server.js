@@ -857,6 +857,14 @@ app.post("/api/reload", (req, res) => {
 // ─── Static Dist Access (if needed by React Native app) ─────────────────────
 app.use("/dist", express.static(distDir));
 
+// ─── Direct Route to Flim Baazy App (no caching to prevent stale page) ─────
+app.get("/", (req, res) => {
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
 // ─── API Documentation & Playground ─────────────────────────────────────────
 app.get("/docs", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "docs.html"));
@@ -867,6 +875,7 @@ app.get("*", (req, res) => {
   if (req.path.startsWith("/api/")) {
     return res.status(404).json({ error: "API endpoint not found" });
   }
+  res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
