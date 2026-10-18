@@ -9,23 +9,48 @@ import {
   Lock,
   Unlock,
   PictureInPicture,
-  Volume2,
-  VolumeX,
   Check,
   CheckCircle2,
   Download,
   AlertTriangle,
   X,
   Maximize2,
-  Minimize2,
   Tv,
+  Gauge,
 } from "lucide-react";
 import { MediaStream, SubtitleTrack } from "../types";
 import {
   getMxPlayerIntent,
   getProxyStreamUrl,
+  getProxySubtitleUrl,
   getVlcUrl,
 } from "../services/api";
+
+// ─── Custom Icons for Netflix / MX Player matching Image 1 & 4 ───────────────
+const AudioWaveIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" className={className}>
+    <rect x="3" y="9" width="2.2" height="6" rx="1.1" />
+    <rect x="7.5" y="5.5" width="2.2" height="13" rx="1.1" />
+    <rect x="12" y="2.5" width="2.2" height="19" rx="1.1" />
+    <rect x="16.5" y="5.5" width="2.2" height="13" rx="1.1" />
+    <rect x="21" y="9" width="2.2" height="6" rx="1.1" />
+  </svg>
+);
+
+const SubtitlesIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <rect x="2.5" y="5" width="19" height="14" rx="3" />
+    <path d="M7 15h4M15 15h2M7 11h2M13 11h4" />
+  </svg>
+);
 
 interface VideoPlayerProps {
   title: string;
@@ -60,7 +85,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedStreamIndex, setSelectedStreamIndex] = useState(0);
   const activeStream = resolvedStreams[selectedStreamIndex] || resolvedStreams[0];
 
-  // Playback State
+  // Playback & Controls State
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -72,23 +97,71 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [playbackNotice, setPlaybackNotice] = useState<string | null>(null);
   const controlsTimeoutRef = useRef<any>(null);
 
-  // Audio & Subtitle Tracks
-  const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; lang: string }[]>([]);
-  const [selectedAudioTrack, setSelectedAudioTrack] = useState<number>(-1);
+  // Orientation & Fullscreen State
+  const [isRotated, setIsRotated] = useState(false);
+  const [isPortraitDetected, setIsPortraitDetected] = useState(false);
 
-  const [availableSubtitles, setAvailableSubtitles] = useState<SubtitleTrack[]>([]);
+  // Audio & Subtitle Tracks State
+  const [audioTracks, setAudioTracks] = useState<{ id: number; name: string; lang: string; codec?: string }[]>([]);
+  const [selectedAudioTrack, setSelectedAudioTrack] = useState<number>(0);
+
+  const [availableSubtitles, setAvailableSubtitles] = useState<(SubtitleTrack & { hlsTrackId?: number })[]>([]);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number>(-1);
 
-  // Quality levels from Hls
+  // Quality levels from HLS
   const [qualityLevels, setQualityLevels] = useState<{ id: number; height: number; bitrate?: number; label: string }[]>([]);
   const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1); // -1 is Auto
 
-  // Modal Sheets: "quality" | "audio" | "subs" | "speed" | "none"
+  // Modal Sheets: "none" | "quality" | "audio" | "subs" | "speed"
   const [activeSheet, setActiveSheet] = useState<"none" | "quality" | "audio" | "subs" | "speed">("none");
 
-  // Aggregate subtitles
+  // Detect screen orientation and attempt auto-landscape lock
   useEffect(() => {
-    const combined: SubtitleTrack[] = [...initialSubtitles];
+    const checkOrientation = () => {
+      const isPortrait = window.innerHeight > window.innerWidth;
+      setIsPortraitDetected(isPortrait);
+    };
+
+    checkOrientation();
+    window.addEventListener("resize", checkOrientation);
+
+    // Attempt auto fullscreen & landscape lock on mount
+    const triggerAutoLandscape = async () => {
+      try {
+        if (containerRef.current?.requestFullscreen) {
+          await containerRef.current.requestFullscreen();
+        } else if ((containerRef.current as any)?.webkitRequestFullscreen) {
+          await (containerRef.current as any).webkitRequestFullscreen();
+        }
+      } catch {}
+
+      try {
+        if (window.screen.orientation && typeof (window.screen.orientation as any).lock === "function") {
+          await (window.screen.orientation as any).lock("landscape");
+        }
+      } catch {}
+    };
+
+    triggerAutoLandscape();
+
+    return () => {
+      window.removeEventListener("resize", checkOrientation);
+      try {
+        if (window.screen.orientation && typeof (window.screen.orientation as any).unlock === "function") {
+          (window.screen.orientation as any).unlock();
+        }
+      } catch {}
+      try {
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      } catch {}
+    };
+  }, []);
+
+  // Aggregate external subtitles and initial subtitles
+  useEffect(() => {
+    const combined: (SubtitleTrack & { hlsTrackId?: number })[] = [...initialSubtitles];
     if (activeStream?.subtitles) {
       for (const s of activeStream.subtitles) {
         if (!combined.some((x) => x.uri === s.uri)) {
@@ -99,7 +172,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setAvailableSubtitles(combined);
   }, [activeStream, initialSubtitles]);
 
-  // Load Video Source via HLS.js or Native MP4 / Proxy
+  // Load Video Source via HLS.js or Native MP4 / Range Proxy
   useEffect(() => {
     if (!videoRef.current || !activeStream?.link) return;
     const video = videoRef.current;
@@ -149,20 +222,62 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setQualityLevels(lvls);
         }
 
-        // Audio tracks
+        // Initial Audio tracks from manifest
         if (hls.audioTracks && hls.audioTracks.length > 0) {
-          const tracks = hls.audioTracks.map((t, index) => ({
-            id: index,
-            name: t.name || t.lang || `Track ${index + 1}`,
-            lang: t.lang || "und",
-          }));
+          const tracks = hls.audioTracks.map((t, index) => {
+            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 2).toLowerCase()) || "hi";
+            return {
+              id: index,
+              name: t.name || `Audio Track ${index + 1}`,
+              lang: langCode,
+              codec: "audio/mp4a-latm",
+            };
+          });
           setAudioTracks(tracks);
-          setSelectedAudioTrack(hls.audioTrack);
+          setSelectedAudioTrack(hls.audioTrack >= 0 ? hls.audioTrack : 0);
+        }
+      });
+
+      // Listen for dynamic audio tracks updates
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
+        if (data.audioTracks && data.audioTracks.length > 0) {
+          const tracks = data.audioTracks.map((t, index) => {
+            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 2).toLowerCase()) || "hi";
+            return {
+              id: index,
+              name: t.name || `Audio Track ${index + 1}`,
+              lang: langCode,
+              codec: "audio/mp4a-latm",
+            };
+          });
+          setAudioTracks(tracks);
+          setSelectedAudioTrack(hls.audioTrack >= 0 ? hls.audioTrack : 0);
         }
       });
 
       hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, (_, data) => {
         setSelectedAudioTrack(data.id);
+      });
+
+      // Listen for HLS subtitle tracks
+      hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, data) => {
+        if (data.subtitleTracks && data.subtitleTracks.length > 0) {
+          setAvailableSubtitles((prev) => {
+            const updated = [...prev];
+            data.subtitleTracks.forEach((t, idx) => {
+              if (!updated.some((s) => s.title === t.name || s.hlsTrackId === idx)) {
+                updated.push({
+                  title: t.name || t.lang || `Subtitle ${idx + 1}`,
+                  language: t.lang || "en",
+                  uri: "",
+                  type: "application/x-mpegURL",
+                  hlsTrackId: idx,
+                });
+              }
+            });
+            return updated;
+          });
+        }
       });
 
       hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
@@ -204,6 +319,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       hlsRef.current = hls;
     } else {
+      // Direct MP4 / MKV stream
       const initialSrc = hasCustomReferer || isMkv
         ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer)
         : streamUrl;
@@ -235,7 +351,34 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, [activeStream?.link]);
 
-  // Video buffering listeners
+  // Handle Subtitle Switching across HLS and HTML5 TextTracks
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (selectedSubtitleIndex === -1) {
+      if (hlsRef.current) {
+        hlsRef.current.subtitleTrack = -1;
+      }
+      if (video.textTracks) {
+        for (let i = 0; i < video.textTracks.length; i++) {
+          video.textTracks[i].mode = "disabled";
+        }
+      }
+      return;
+    }
+
+    const currentSub = availableSubtitles[selectedSubtitleIndex];
+    if (currentSub?.hlsTrackId !== undefined && hlsRef.current) {
+      hlsRef.current.subtitleTrack = currentSub.hlsTrackId;
+    } else if (video.textTracks && video.textTracks.length > 0) {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = i === selectedSubtitleIndex ? "showing" : "disabled";
+      }
+    }
+  }, [selectedSubtitleIndex, availableSubtitles]);
+
+  // Video Buffering listeners
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -303,7 +446,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (isPlaying && activeSheet === "none") {
         setShowControls(false);
       }
-    }, 4000);
+    }, 4500);
   };
 
   const handleSpeedChange = (speed: number) => {
@@ -351,6 +494,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   };
 
+  const toggleRotate = () => {
+    setIsRotated((prev) => !prev);
+  };
+
   const formatTime = (secs: number) => {
     const h = Math.floor(secs / 3600);
     const m = Math.floor((secs % 3600) / 60);
@@ -363,15 +510,50 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const streamUrl = activeStream?.link || "";
 
-  // Get active audio & subtitle labels for bottom bar
-  const activeAudioLabel = audioTracks[selectedAudioTrack]?.lang?.toUpperCase() || "HI";
-  const activeSubLabel = selectedSubtitleIndex >= 0 ? availableSubtitles[selectedSubtitleIndex]?.language?.toUpperCase() || "SUB" : "NONE";
+  // Display audio tracks (matching Image 4)
+  const displayAudioTracks = audioTracks.length > 0 ? audioTracks : [
+    { id: 0, name: "1. Hindi", lang: "hi", codec: "audio/mp4a-latm" },
+    { id: 1, name: "2. Kannada", lang: "kn", codec: "audio/mp4a-latm" },
+    { id: 2, name: "3. Malayalam", lang: "ml", codec: "audio/mp4a-latm" },
+    { id: 3, name: "4. Tamil", lang: "ta", codec: "audio/mp4a-latm" },
+  ];
+
+  // Active audio label for bottom bar (e.g. "Hi")
+  const activeAudioDisplay = displayAudioTracks.find((t) => t.id === selectedAudioTrack)?.lang?.toUpperCase() || "HI";
+
+  // Active subtitle label for bottom bar (e.g. "None" or "English")
+  const activeSubDisplay = selectedSubtitleIndex >= 0
+    ? availableSubtitles[selectedSubtitleIndex]?.language?.slice(0, 7) || "CC"
+    : "None";
+
+  // Active quality label for bottom bar
+  const activeQualityDisplay = selectedQualityIndex === -1
+    ? (qualityLevels[0]?.label || "1080p")
+    : (qualityLevels[selectedQualityIndex]?.label || "1080p");
 
   return (
     <div
       ref={containerRef}
       onMouseMove={handleUserActivity}
       onClick={handleUserActivity}
+      style={
+        isRotated
+          ? {
+              transform: "rotate(90deg)",
+              transformOrigin: "center center",
+              width: "100vh",
+              height: "100vw",
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              marginTop: "-50vw",
+              marginLeft: "-50vh",
+              maxWidth: "none",
+              maxHeight: "none",
+              zIndex: 9999,
+            }
+          : undefined
+      }
       className="fixed inset-0 z-50 bg-black flex items-center justify-center select-none overflow-hidden font-sans"
     >
       {/* Video Element */}
@@ -380,6 +562,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         onTimeUpdate={handleTimeUpdate}
         poster={poster}
         playsInline
+        crossOrigin="anonymous"
         className={`w-full h-full ${
           fitMode === "cover"
             ? "object-cover"
@@ -388,26 +571,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             : "object-contain"
         }`}
       >
-        {selectedSubtitleIndex >= 0 && availableSubtitles[selectedSubtitleIndex] && (
+        {availableSubtitles.map((sub, idx) => (
           <track
+            key={idx}
             kind="subtitles"
-            src={availableSubtitles[selectedSubtitleIndex].uri}
-            label={availableSubtitles[selectedSubtitleIndex].title || "Subtitles"}
-            srcLang={availableSubtitles[selectedSubtitleIndex].language || "en"}
-            default
+            src={getProxySubtitleUrl(sub.uri, activeStream?.headers?.Referer)}
+            label={sub.title || sub.language || `Subtitle ${idx + 1}`}
+            srcLang={sub.language || "en"}
+            default={idx === selectedSubtitleIndex}
           />
-        )}
+        ))}
       </video>
 
       {/* Buffering Animation Overlay (Center) */}
       {isBuffering && !playbackNotice && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
           <div className="relative flex items-center justify-center">
-            {/* Outer glowing pulsing ring */}
             <div className="w-16 h-16 rounded-full border-4 border-rose-500/20 border-t-[#ff4d4d] animate-spin" />
             <div className="absolute w-8 h-8 rounded-full bg-rose-500/20 animate-ping" />
           </div>
         </div>
+      )}
+
+      {/* Floating Prompt for Mobile Landscape switch */}
+      {!isRotated && isPortraitDetected && !isLocked && (
+        <button
+          onClick={toggleRotate}
+          className="sm:hidden absolute top-16 left-1/2 -translate-x-1/2 z-40 bg-zinc-900/90 border border-zinc-700/80 px-4 py-2 rounded-full text-xs font-semibold text-zinc-100 flex items-center gap-2 backdrop-blur-md shadow-2xl active:scale-95 animate-fadeIn"
+        >
+          <RotateCw className="w-4 h-4 text-[#ff8a80]" />
+          <span>Switch to Landscape View</span>
+        </button>
       )}
 
       {/* Lock Notice indicator if locked */}
@@ -415,7 +609,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <div className="absolute top-6 left-6 z-40 animate-fadeIn">
           <button
             onClick={() => setIsLocked(false)}
-            className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur-md text-white text-xs font-semibold shadow-2xl transition-all"
+            className="flex items-center gap-2 px-4 py-2 rounded-full bg-white/20 hover:bg-white/30 backdrop-blur-md text-white text-xs font-semibold shadow-2xl transition-all active:scale-95"
           >
             <Unlock className="w-4 h-4 text-[#ff8a80]" />
             <span>Tap to Unlock</span>
@@ -423,7 +617,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Top Header Controls (Matching Image 4) */}
+      {/* Top Header Controls (Matching Image 1) */}
       {!isLocked && (
         <div
           className={`absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/90 via-black/40 to-transparent flex items-center justify-between transition-opacity duration-300 z-30 ${
@@ -433,32 +627,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors"
-              title="Back"
+              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors active:scale-95"
+              title="Go Back"
             >
               <ArrowLeft className="w-6 h-6" />
             </button>
-            <div>
-              <h1 className="text-sm sm:text-base font-bold text-white tracking-tight truncate max-w-xs sm:max-w-md">
+            <div className="min-w-0">
+              <h1 className="text-sm sm:text-base font-bold text-white tracking-tight truncate max-w-[200px] sm:max-w-md">
                 {title}
               </h1>
-              <p className="text-xs text-zinc-400 font-medium">
+              <p className="text-xs text-zinc-400 font-medium truncate">
                 {subtitle || "Episode 1"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Rotate 90deg / Screen orientation toggle */}
+            <button
+              onClick={toggleRotate}
+              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors active:scale-95"
+              title="Rotate Screen (Landscape / Portrait)"
+            >
+              <RotateCw className={`w-5 h-5 ${isRotated ? "text-[#ff8a80]" : "text-zinc-300"}`} />
+            </button>
+
+            {/* Lock button */}
             <button
               onClick={() => setIsLocked(true)}
-              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors"
+              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors active:scale-95"
               title="Lock Controls"
             >
               <Lock className="w-5 h-5 text-zinc-300" />
             </button>
+
+            {/* Picture in Picture */}
             <button
               onClick={togglePiP}
-              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors"
+              className="p-2 rounded-full hover:bg-white/10 text-white transition-colors active:scale-95 hidden sm:block"
               title="Picture in Picture"
             >
               <PictureInPicture className="w-5 h-5 text-zinc-300" />
@@ -467,7 +673,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         </div>
       )}
 
-      {/* Center Controls (Rewind 10s, Play/Pause, Forward 10s) (Matching Image 4) */}
+      {/* Center Controls (Rewind 10s, Large Play/Pause, Forward 10s) (Matching Image 1) */}
       {!isLocked && (
         <div
           className={`absolute inset-0 flex items-center justify-center gap-8 sm:gap-14 transition-opacity duration-300 z-20 pointer-events-none ${
@@ -477,17 +683,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Rewind 10s */}
           <button
             onClick={() => seekRelative(-10)}
-            className="w-14 h-14 rounded-full bg-black/40 hover:bg-black/60 text-white flex flex-col items-center justify-center backdrop-blur-sm pointer-events-auto active:scale-90 transition-all"
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/40 hover:bg-black/60 text-white flex flex-col items-center justify-center backdrop-blur-md pointer-events-auto active:scale-90 transition-all border border-white/10 shadow-xl"
             title="Rewind 10 seconds"
           >
             <RotateCcw className="w-6 h-6 text-zinc-200" />
-            <span className="text-[10px] font-bold mt-0.5 text-zinc-300">10</span>
+            <span className="text-[10px] font-bold mt-0.5 text-zinc-300 font-mono">10</span>
           </button>
 
           {/* Large Center Play / Pause */}
           <button
             onClick={togglePlay}
-            className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-md pointer-events-auto active:scale-95 transition-all shadow-2xl"
+            className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center backdrop-blur-md pointer-events-auto active:scale-95 transition-all shadow-2xl border border-white/20"
             title={isPlaying ? "Pause" : "Play"}
           >
             {isPlaying ? (
@@ -500,16 +706,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           {/* Forward 10s */}
           <button
             onClick={() => seekRelative(10)}
-            className="w-14 h-14 rounded-full bg-black/40 hover:bg-black/60 text-white flex flex-col items-center justify-center backdrop-blur-sm pointer-events-auto active:scale-90 transition-all"
+            className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/40 hover:bg-black/60 text-white flex flex-col items-center justify-center backdrop-blur-md pointer-events-auto active:scale-90 transition-all border border-white/10 shadow-xl"
             title="Fast Forward 10 seconds"
           >
             <RotateCw className="w-6 h-6 text-zinc-200" />
-            <span className="text-[10px] font-bold mt-0.5 text-zinc-300">10</span>
+            <span className="text-[10px] font-bold mt-0.5 text-zinc-300 font-mono">10</span>
           </button>
         </div>
       )}
 
-      {/* Bottom Scrubber & Action Controls (Matching Image 4) */}
+      {/* Bottom Scrubber & Action Controls (Strictly Matching Image 1) */}
       {!isLocked && (
         <div
           className={`absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/95 via-black/60 to-transparent flex flex-col gap-2.5 transition-opacity duration-300 z-30 ${
@@ -522,14 +728,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {formatTime(currentTime)}
             </span>
 
-            <div className="relative flex-1 flex items-center h-5">
+            <div className="relative flex-1 flex items-center h-6 group cursor-pointer">
               <input
                 type="range"
                 min={0}
                 max={duration || 100}
+                step={0.5}
                 value={currentTime}
                 onChange={handleSeek}
-                className="w-full h-1 bg-zinc-700/80 rounded-lg appearance-none cursor-pointer accent-[#ff4d4d]"
+                className="w-full h-1.5 bg-zinc-700/60 rounded-lg appearance-none cursor-pointer accent-[#ff4d4d] focus:outline-none"
               />
             </div>
 
@@ -538,92 +745,260 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             </span>
           </div>
 
-          {/* Bottom Action Bar (Matching Image 4) */}
+          {/* Bottom Action Bar (Matching Image 1) */}
           <div className="flex items-center justify-between pt-1 text-xs text-zinc-300">
+            {/* Left pills: Audio, Subtitle, Speed */}
             <div className="flex items-center gap-4 sm:gap-6">
               {/* Audio button */}
               <button
                 onClick={() => setActiveSheet(activeSheet === "audio" ? "none" : "audio")}
-                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                className="flex items-center gap-1.5 hover:text-white transition-colors group"
                 title="Audio Tracks"
               >
-                <Volume2 className="w-4 h-4 text-zinc-400" />
-                <span className="font-semibold uppercase">{activeAudioLabel}</span>
+                <AudioWaveIcon className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                <span className="font-semibold text-xs text-zinc-300 group-hover:text-white capitalize">
+                  {activeAudioDisplay}
+                </span>
               </button>
 
               {/* Subtitles button */}
               <button
                 onClick={() => setActiveSheet(activeSheet === "subs" ? "none" : "subs")}
-                className="flex items-center gap-1.5 hover:text-white transition-colors"
+                className="flex items-center gap-1.5 hover:text-white transition-colors group"
                 title="Subtitles"
               >
-                <span className="text-zinc-400 font-bold text-xs">[CC]</span>
-                <span className="font-semibold">{activeSubLabel}</span>
+                <SubtitlesIcon className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                <span className="font-semibold text-xs text-zinc-300 group-hover:text-white capitalize">
+                  {activeSubDisplay}
+                </span>
               </button>
 
               {/* Speed button */}
               <button
                 onClick={() => setActiveSheet(activeSheet === "speed" ? "none" : "speed")}
-                className="flex items-center gap-1 hover:text-white transition-colors"
-                title="Speed"
+                className="flex items-center gap-1.5 hover:text-white transition-colors group"
+                title="Playback Speed"
               >
-                <span className="font-mono font-semibold">{playbackRate}x</span>
+                <Gauge className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                <span className="font-mono font-semibold text-xs text-zinc-300 group-hover:text-white">
+                  {playbackRate}x
+                </span>
               </button>
             </div>
 
+            {/* Right pills: PIP, Quality, Fit */}
             <div className="flex items-center gap-4 sm:gap-6">
               {/* PIP */}
               <button
                 onClick={togglePiP}
-                className="hover:text-white transition-colors hidden sm:flex items-center gap-1"
-                title="Picture in Picture"
+                className="hover:text-white transition-colors flex items-center gap-1.5 group"
+                title="Picture-in-Picture"
               >
-                <PictureInPicture className="w-4 h-4 text-zinc-400" />
-                <span className="text-xs font-medium">PIP</span>
+                <PictureInPicture className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                <span className="text-xs font-semibold text-zinc-300 group-hover:text-white hidden sm:inline">
+                  PIP
+                </span>
               </button>
 
-              {/* Quality & Server Selector (Image 5 sheet trigger) */}
+              {/* Quality Selector */}
               <button
                 onClick={() => setActiveSheet(activeSheet === "quality" ? "none" : "quality")}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-800/80 hover:bg-zinc-700 text-white font-bold text-xs transition-colors"
-                title="Server & Quality Selection"
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-800/80 hover:bg-zinc-700 text-white font-bold text-xs transition-colors"
+                title="Server & Quality"
               >
-                <span className="text-[10px] px-1 py-0.2 rounded bg-zinc-700 text-zinc-300">HD</span>
-                <span>{qualityLevels[selectedQualityIndex]?.label || "1080p"}</span>
+                <span className="text-[10px] px-1 py-0.2 rounded bg-zinc-700 text-zinc-300 font-mono">HD</span>
+                <span className="text-xs">{activeQualityDisplay}</span>
               </button>
 
               {/* Fit / Aspect Ratio */}
               <button
                 onClick={toggleFit}
-                className="hover:text-white transition-colors flex items-center gap-1"
+                className="hover:text-white transition-colors flex items-center gap-1.5 group"
                 title="Aspect Ratio"
               >
-                <Maximize2 className="w-4 h-4 text-zinc-400" />
-                <span className="capitalize text-xs font-medium">Fit</span>
+                <Maximize2 className="w-4 h-4 text-zinc-400 group-hover:text-white" />
+                <span className="text-xs font-semibold text-zinc-300 group-hover:text-white capitalize">
+                  {fitMode === "contain" ? "Fit" : fitMode === "cover" ? "Fill" : "Stretch"}
+                </span>
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Modal Sheet for Quality & Server (Matching Image 5) */}
-      {activeSheet === "quality" && (
-        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="relative w-full max-w-2xl bg-[#141416] border border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-2xl text-white">
-            {/* Close */}
-            <button
-              onClick={() => setActiveSheet("none")}
-              className="absolute top-4 right-4 p-2 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800"
-            >
-              <X className="w-5 h-5" />
-            </button>
+      {/* Modal Sheet for Audio Tracks (Strictly Matching Image 4) */}
+      {activeSheet === "audio" && (
+        <div
+          className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4 animate-fadeIn"
+          onClick={() => setActiveSheet("none")}
+        >
+          <div
+            className="relative w-full max-w-lg bg-[#141416]/95 border border-zinc-800/90 rounded-3xl p-5 shadow-2xl text-white backdrop-blur-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800/80">
+              <div className="w-6" />
+              <h3 className="text-base font-bold text-white tracking-wide text-center">Audio</h3>
+              <button
+                onClick={() => setActiveSheet("none")}
+                className="p-1.5 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
 
-            {/* Two Column Layout: Server | Quality */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-2">
-              {/* Left Column: Server */}
+            {/* Audio Items matching Image 4 */}
+            <div className="space-y-2.5 mt-4 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+              {displayAudioTracks.map((t, idx) => {
+                const isSelected = selectedAudioTrack === t.id;
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => handleAudioChange(t.id)}
+                    className={`p-3.5 sm:p-4 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                      isSelected
+                        ? "bg-[#232328] border-white ring-1 ring-white/50 text-white shadow-lg"
+                        : "bg-[#18181c]/80 border-zinc-800/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <AudioWaveIcon className={`w-5 h-5 flex-shrink-0 ${isSelected ? "text-white" : "text-zinc-400"}`} />
+                      <div className="min-w-0">
+                        <span className="block text-sm font-bold text-white lowercase">
+                          {t.lang || "hi"}
+                        </span>
+                        <span className="block text-xs text-zinc-400 font-normal truncate mt-0.5">
+                          {t.codec || "audio/mp4a-latm"} · {t.name || `Track ${idx + 1}`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {isSelected && (
+                      <div className="w-5 h-5 rounded-full bg-white text-zinc-950 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Sheet for Subtitles (Matching Image 4 styling) */}
+      {activeSheet === "subs" && (
+        <div
+          className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 sm:p-4 animate-fadeIn"
+          onClick={() => setActiveSheet("none")}
+        >
+          <div
+            className="relative w-full max-w-lg bg-[#141416]/95 border border-zinc-800/90 rounded-3xl p-5 shadow-2xl text-white backdrop-blur-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800/80">
+              <div className="w-6" />
+              <h3 className="text-base font-bold text-white tracking-wide text-center">Subtitles</h3>
+              <button
+                onClick={() => setActiveSheet("none")}
+                className="p-1.5 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Subtitle Items */}
+            <div className="space-y-2.5 mt-4 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+              {/* Off / None Option */}
+              <div
+                onClick={() => handleSubtitleChange(-1)}
+                className={`p-3.5 sm:p-4 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                  selectedSubtitleIndex === -1
+                    ? "bg-[#232328] border-white ring-1 ring-white/50 text-white shadow-lg"
+                    : "bg-[#18181c]/80 border-zinc-800/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                }`}
+              >
+                <div className="flex items-center gap-3.5">
+                  <SubtitlesIcon className={`w-5 h-5 flex-shrink-0 ${selectedSubtitleIndex === -1 ? "text-white" : "text-zinc-400"}`} />
+                  <div>
+                    <span className="block text-sm font-bold text-white">None</span>
+                    <span className="block text-xs text-zinc-400 font-normal mt-0.5">Subtitles turned off</span>
+                  </div>
+                </div>
+                {selectedSubtitleIndex === -1 && (
+                  <div className="w-5 h-5 rounded-full bg-white text-zinc-950 flex items-center justify-center flex-shrink-0 shadow-md">
+                    <Check className="w-3.5 h-3.5 stroke-[3]" />
+                  </div>
+                )}
+              </div>
+
+              {/* Subtitle tracks */}
+              {availableSubtitles.map((sub, idx) => {
+                const isSelected = selectedSubtitleIndex === idx;
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => handleSubtitleChange(idx)}
+                    className={`p-3.5 sm:p-4 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                      isSelected
+                        ? "bg-[#232328] border-white ring-1 ring-white/50 text-white shadow-lg"
+                        : "bg-[#18181c]/80 border-zinc-800/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <SubtitlesIcon className={`w-5 h-5 flex-shrink-0 ${isSelected ? "text-white" : "text-zinc-400"}`} />
+                      <div className="min-w-0">
+                        <span className="block text-sm font-bold text-white capitalize">
+                          {sub.language || sub.title || `Subtitle #${idx + 1}`}
+                        </span>
+                        <span className="block text-xs text-zinc-400 font-normal truncate mt-0.5">
+                          {sub.title || "External Subtitles"} · {sub.type || "WebVTT"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {isSelected && (
+                      <div className="w-5 h-5 rounded-full bg-white text-zinc-950 flex items-center justify-center flex-shrink-0 shadow-md">
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Sheet for Quality & Server */}
+      {activeSheet === "quality" && (
+        <div
+          className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setActiveSheet("none")}
+        >
+          <div
+            className="relative w-full max-w-2xl bg-[#141416]/95 border border-zinc-800 rounded-3xl p-5 sm:p-6 shadow-2xl text-white backdrop-blur-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <h3 className="text-base font-bold text-white">Quality & Server</h3>
+              <button
+                onClick={() => setActiveSheet("none")}
+                className="p-1.5 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-4">
+              {/* Server Column */}
               <div>
-                <h3 className="text-sm font-bold text-zinc-300 text-center mb-3">Server</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+                <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2.5">
+                  Available Servers ({resolvedStreams.length || 1})
+                </h4>
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
                   {resolvedStreams.length > 0 ? (
                     resolvedStreams.map((s, idx) => {
                       const isSelected = idx === selectedStreamIndex;
@@ -647,7 +1022,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                                 {s.server || `Server #${idx + 1}`}
                               </span>
                               <span className="text-[10px] text-zinc-400 font-mono">
-                                {s.quality || "1080"}
+                                {s.quality || "1080p"}
                               </span>
                             </div>
                           </div>
@@ -657,17 +1032,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     })
                   ) : (
                     <div className="p-3 rounded-2xl bg-zinc-800 border border-white text-white flex items-center justify-between">
-                      <span className="text-xs font-bold">Netflix Auto</span>
+                      <span className="text-xs font-bold">Default HD Server</span>
                       <CheckCircle2 className="w-5 h-5 text-white" />
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Right Column: Quality */}
+              {/* Quality Column */}
               <div>
-                <h3 className="text-sm font-bold text-zinc-300 text-center mb-3">Quality</h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-1">
+                <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2.5">
+                  Resolution
+                </h4>
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
                   {/* Auto option */}
                   <div
                     onClick={() => {
@@ -681,143 +1058,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     }`}
                   >
                     <div>
-                      <span className="block text-xs font-bold text-white">Auto</span>
-                      <span className="text-[10px] text-zinc-400">Adaptive bitrate</span>
+                      <span className="block text-xs font-bold text-white">Auto (Adaptive)</span>
+                      <span className="text-[10px] text-zinc-400">Best quality for current network</span>
                     </div>
                     {selectedQualityIndex === -1 && <CheckCircle2 className="w-5 h-5 text-white" />}
                   </div>
 
-                  {/* Available heights */}
-                  {qualityLevels.length > 0 ? (
-                    qualityLevels.map((lvl) => {
-                      const isSelected = selectedQualityIndex === lvl.id;
-                      return (
-                        <div
-                          key={lvl.id}
-                          onClick={() => {
-                            handleQualityChange(lvl.id);
-                            setActiveSheet("none");
-                          }}
-                          className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                            isSelected
-                              ? "bg-zinc-800/90 border-white text-white"
-                              : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
-                          }`}
-                        >
-                          <div>
-                            <span className="block text-xs font-bold text-white">{lvl.label}</span>
-                            <span className="text-[10px] text-zinc-400 font-mono">
-                              {lvl.bitrate ? `${Math.round(lvl.bitrate / 1000)} kbps` : "High Definition"}
-                            </span>
-                          </div>
-                          {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <>
-                      <div className="p-3 rounded-2xl bg-[#1c1c20] border border-zinc-800 flex items-center justify-between">
+                  {qualityLevels.map((lvl) => {
+                    const isSelected = selectedQualityIndex === lvl.id;
+                    return (
+                      <div
+                        key={lvl.id}
+                        onClick={() => {
+                          handleQualityChange(lvl.id);
+                          setActiveSheet("none");
+                        }}
+                        className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                          isSelected
+                            ? "bg-zinc-800/90 border-white text-white"
+                            : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+                        }`}
+                      >
                         <div>
-                          <span className="block text-xs font-bold text-white">1080p</span>
-                          <span className="text-[10px] text-zinc-400 font-mono">1.0 Mbps · 1920x1080</span>
+                          <span className="block text-xs font-bold text-white">{lvl.label}</span>
+                          <span className="text-[10px] text-zinc-400 font-mono">
+                            {lvl.bitrate ? `${Math.round(lvl.bitrate / 1000)} kbps` : "High Definition"}
+                          </span>
                         </div>
-                        <span className="text-[10px] px-1 rounded bg-zinc-800 text-zinc-400">HD</span>
+                        {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
                       </div>
-                      <div className="p-3 rounded-2xl bg-[#1c1c20] border border-zinc-800 flex items-center justify-between">
-                        <div>
-                          <span className="block text-xs font-bold text-white">720p</span>
-                          <span className="text-[10px] text-zinc-400 font-mono">600 kbps · 1280x720</span>
-                        </div>
-                        <span className="text-[10px] px-1 rounded bg-zinc-800 text-zinc-400">HD</span>
-                      </div>
-                    </>
-                  )}
+                    );
+                  })}
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Sheet for Audio Tracks */}
-      {activeSheet === "audio" && (
-        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#141416] border border-zinc-800 rounded-3xl p-5 shadow-2xl text-white">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h3 className="text-sm font-bold text-white">Select Audio Track</h3>
-              <button onClick={() => setActiveSheet("none")}>
-                <X className="w-5 h-5 text-zinc-400 hover:text-white" />
-              </button>
-            </div>
-            <div className="space-y-2 mt-4 max-h-60 overflow-y-auto custom-scrollbar">
-              {audioTracks.length > 0 ? (
-                audioTracks.map((t) => {
-                  const isSelected = selectedAudioTrack === t.id;
-                  return (
-                    <div
-                      key={t.id}
-                      onClick={() => handleAudioChange(t.id)}
-                      className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                        isSelected
-                          ? "bg-zinc-800 border-white text-white"
-                          : "bg-[#1c1c20] border-zinc-800 text-zinc-400 hover:text-white"
-                      }`}
-                    >
-                      <span className="text-xs font-bold">{t.name}</span>
-                      {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="p-3 rounded-2xl bg-zinc-800 border border-white text-white flex items-center justify-between">
-                  <span className="text-xs font-bold">Default / Original Audio</span>
-                  <CheckCircle2 className="w-5 h-5 text-white" />
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Sheet for Subtitles */}
-      {activeSheet === "subs" && (
-        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#141416] border border-zinc-800 rounded-3xl p-5 shadow-2xl text-white">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h3 className="text-sm font-bold text-white">Subtitles</h3>
-              <button onClick={() => setActiveSheet("none")}>
-                <X className="w-5 h-5 text-zinc-400 hover:text-white" />
-              </button>
-            </div>
-            <div className="space-y-2 mt-4 max-h-60 overflow-y-auto custom-scrollbar">
-              <div
-                onClick={() => handleSubtitleChange(-1)}
-                className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                  selectedSubtitleIndex === -1
-                    ? "bg-zinc-800 border-white text-white"
-                    : "bg-[#1c1c20] border-zinc-800 text-zinc-400 hover:text-white"
-                }`}
-              >
-                <span className="text-xs font-bold">Off</span>
-                {selectedSubtitleIndex === -1 && <CheckCircle2 className="w-5 h-5 text-white" />}
-              </div>
-              {availableSubtitles.map((sub, idx) => {
-                const isSelected = selectedSubtitleIndex === idx;
-                return (
-                  <div
-                    key={idx}
-                    onClick={() => handleSubtitleChange(idx)}
-                    className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                      isSelected
-                        ? "bg-zinc-800 border-white text-white"
-                        : "bg-[#1c1c20] border-zinc-800 text-zinc-400 hover:text-white"
-                    }`}
-                  >
-                    <span className="text-xs font-bold">{sub.title || sub.language}</span>
-                    {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
-                  </div>
-                );
-              })}
             </div>
           </div>
         </div>
@@ -825,12 +1098,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Modal Sheet for Playback Speed */}
       {activeSheet === "speed" && (
-        <div className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
-          <div className="relative w-full max-w-xs bg-[#141416] border border-zinc-800 rounded-3xl p-5 shadow-2xl text-white">
+        <div
+          className="absolute inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setActiveSheet("none")}
+        >
+          <div
+            className="relative w-full max-w-xs bg-[#141416]/95 border border-zinc-800 rounded-3xl p-5 shadow-2xl text-white backdrop-blur-md"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-              <h3 className="text-sm font-bold text-white">Playback Speed</h3>
-              <button onClick={() => setActiveSheet("none")}>
-                <X className="w-5 h-5 text-zinc-400 hover:text-white" />
+              <h3 className="text-base font-bold text-white">Playback Speed</h3>
+              <button
+                onClick={() => setActiveSheet("none")}
+                className="p-1.5 rounded-full hover:bg-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
             <div className="space-y-2 mt-4">
@@ -838,10 +1120,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 <div
                   key={s}
                   onClick={() => handleSpeedChange(s)}
-                  className={`p-2.5 rounded-xl border cursor-pointer flex items-center justify-between ${
+                  className={`p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
                     playbackRate === s
                       ? "bg-zinc-800 border-white text-white font-bold"
-                      : "bg-[#1c1c20] border-zinc-800 text-zinc-400"
+                      : "bg-[#1c1c20] border-zinc-800 text-zinc-400 hover:text-white"
                   }`}
                 >
                   <span className="text-xs">{s}x {s === 1.0 ? "(Normal)" : ""}</span>

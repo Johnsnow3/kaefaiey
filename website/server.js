@@ -707,17 +707,20 @@ app.all("/api/proxy/stream", async (req, res) => {
         const lines = String(m3u8Res.data).split("\n");
         const rewritten = lines.map((line) => {
           const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith("#")) {
-            // Rewrite URI in encryption keys e.g. #EXT-X-KEY:METHOD=AES-128,URI="..."
-            if (trimmed.startsWith("#EXT-X-KEY:") && trimmed.includes('URI="')) {
-              return trimmed.replace(/URI="([^"]+)"/, (_, keyUri) => {
-                let absKey = keyUri;
-                try { absKey = new URL(keyUri, targetUrl).href; } catch {}
-                return `URI="/api/proxy/stream?url=${encodeURIComponent(absKey)}&referer=${encodeURIComponent(originReferer)}"`;
+          if (!trimmed) return line;
+
+          if (trimmed.startsWith("#")) {
+            // Rewrite URI in tags e.g. #EXT-X-MEDIA:TYPE=AUDIO,...URI="..." or #EXT-X-MEDIA:TYPE=SUBTITLES,...URI="..." or #EXT-X-KEY:...URI="..." or #EXT-X-MAP:...URI="..."
+            if (trimmed.includes('URI="')) {
+              return trimmed.replace(/URI="([^"]+)"/g, (_, rawUri) => {
+                let absUri = rawUri;
+                try { absUri = new URL(rawUri, targetUrl).href; } catch {}
+                return `URI="/api/proxy/stream?url=${encodeURIComponent(absUri)}&referer=${encodeURIComponent(originReferer)}"`;
               });
             }
             return line;
           }
+
           let absSeg = trimmed;
           try { absSeg = new URL(trimmed, targetUrl).href; } catch {}
           return `/api/proxy/stream?url=${encodeURIComponent(absSeg)}&referer=${encodeURIComponent(originReferer)}`;
@@ -759,6 +762,11 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     });
 
+    if (req.query.download === "1" || req.query.download === "true") {
+      const filename = req.query.filename || "video.mp4";
+      res.setHeader("Content-Disposition", `attachment; filename="${String(filename).replace(/"/g, '')}"`);
+    }
+
     // Ensure browser recognises video if upstream sent octet-stream
     const currType = (streamRes.headers["content-type"] || "").toLowerCase();
     if (!currType || currType.includes("octet-stream")) {
@@ -795,6 +803,53 @@ app.all("/api/proxy/stream", async (req, res) => {
       return;
     }
     res.status(502).json({ error: `Stream proxy failed: ${err.message}` });
+  }
+});
+
+// ─── Subtitle Proxy Endpoint (CORS bypass + WebVTT / SRT Converter) ───────────
+app.get("/api/proxy/subtitle", async (req, res) => {
+  const { url: targetUrl, referer } = req.query;
+  if (!targetUrl) return res.status(400).send("Missing url parameter");
+
+  try {
+    const originReferer = referer ? String(referer) : String(targetUrl);
+    const subHeaders = {
+      "User-Agent": defaultBrowserHeaders["User-Agent"],
+      Referer: originReferer,
+      Accept: "*/*",
+    };
+
+    if (String(targetUrl).includes("userver") || String(originReferer).includes("netmirror")) {
+      try {
+        const cachedToken = (await kvStore.get("t_hash_t")) || (await kvStore.get("t_hash_t_data"))?.token;
+        if (cachedToken) {
+          subHeaders["Cookie"] = `t_hash_t=${cachedToken}; user_token=${cachedToken}; hd=1`;
+        }
+      } catch {}
+    }
+
+    const subRes = await axios.get(String(targetUrl), {
+      responseType: "text",
+      headers: subHeaders,
+      timeout: 10000,
+    });
+
+    let content = String(subRes.data || "");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+
+    // If already starts with WEBVTT
+    if (content.trim().startsWith("WEBVTT")) {
+      return res.send(content);
+    }
+
+    // Convert SRT to WebVTT
+    // Replace comma with dot in timestamps (00:01:23,456 --> 00:01:23.456)
+    const vttContent = "WEBVTT\n\n" + content.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+    return res.send(vttContent);
+  } catch (err) {
+    res.status(502).send("Failed to proxy subtitle file");
   }
 });
 

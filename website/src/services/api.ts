@@ -183,6 +183,15 @@ export function getProxyStreamUrl(streamUrl: string, referer?: string): string {
   return `${window.location.origin}/api/proxy/stream?${params.toString()}`;
 }
 
+export function getProxySubtitleUrl(subtitleUrl: string, referer?: string): string {
+  if (!subtitleUrl) return "";
+  if (subtitleUrl.startsWith("/api/proxy/")) return subtitleUrl;
+  const params = new URLSearchParams();
+  params.set("url", subtitleUrl);
+  if (referer) params.set("referer", referer);
+  return `${window.location.origin}/api/proxy/subtitle?${params.toString()}`;
+}
+
 export function getVlcUrl(streamUrl: string): string {
   // Mobile & Desktop VLC deep link protocol
   return `vlc://${streamUrl}`;

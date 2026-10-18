@@ -112,11 +112,19 @@ async function build() {
     .safe-bottom {
       padding-bottom: max(env(safe-area-inset-bottom, 8px), 8px);
     }
-    body {
+    html, body {
       background-color: #07090e;
       color: #f1f5f9;
-      overflow-x: hidden;
+      overflow-x: hidden !important;
+      max-width: 100vw !important;
+      width: 100%;
+      position: relative;
       -webkit-tap-highlight-color: transparent;
+      touch-action: pan-y;
+      overscroll-behavior-x: none;
+    }
+    * {
+      box-sizing: border-box;
     }
   </style>
 </head>

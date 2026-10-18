@@ -1163,10 +1163,20 @@ export const netMirrorGetStream = async ({
       if (Array.isArray(plData.tracks)) {
         plData.tracks.forEach((track: any) => {
           let uri = track.file || "";
-          if (uri.startsWith("//")) uri = "https:" + uri;
           if (!uri) return;
+          if (!uri.startsWith("http")) {
+            if (uri.startsWith("//")) {
+              uri = "https:" + uri;
+            } else {
+              try {
+                uri = new URL(uri, baseUrl).href;
+              } catch {
+                uri = `${baseUrl}/${uri.replace(/^\//, "")}`;
+              }
+            }
+          }
 
-          const isVtt = uri.endsWith(".vtt");
+          const isVtt = uri.toLowerCase().includes(".vtt");
           subtitles.push({
             title: track.label || "Subtitle",
             language: track.label || "English",

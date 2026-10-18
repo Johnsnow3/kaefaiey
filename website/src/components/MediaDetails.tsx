@@ -52,6 +52,7 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState<number>(1);
   const [extractingStream, setExtractingStream] = useState(false);
+  const [downloadingEpLink, setDownloadingEpLink] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [saved, setSaved] = useState(() => isInWatchlist(item.link));
 
@@ -188,6 +189,33 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
     }
   };
 
+  const handleDownloadEpisode = async (ep: Episode, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (downloadingEpLink) return;
+    setDownloadingEpLink(ep.link);
+    try {
+      const mediaType = isSeries ? "series" : "movie";
+      const streams = await fetchStream(provider, ep.link, mediaType);
+      if (!streams || streams.length === 0) {
+        throw new Error("No download stream available for this episode.");
+      }
+      const streamUrl = streams[0].link;
+      const safeTitle = `${meta?.title || item.title} - ${ep.title || "Episode"}.mp4`.replace(/[\\/:*?"<>|]/g, "_");
+      const downloadProxyUrl = `${getProxyStreamUrl(streamUrl, streams[0].headers?.Referer)}&download=1&filename=${encodeURIComponent(safeTitle)}`;
+      const a = document.createElement("a");
+      a.href = downloadProxyUrl;
+      a.download = safeTitle;
+      a.target = "_blank";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err: any) {
+      alert(`Download failed: ${err.message || "Unable to extract stream"}`);
+    } finally {
+      setDownloadingEpLink(null);
+    }
+  };
+
   // Close on Escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -205,8 +233,8 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
   ].filter(Boolean);
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#09090b] overflow-y-auto custom-scrollbar animate-fadeIn text-slate-100 flex flex-col items-center">
-      <div className="relative w-full max-w-2xl min-h-screen pb-24 flex flex-col">
+    <div className="fixed inset-0 z-50 bg-[#09090b] overflow-y-auto overflow-x-hidden w-full max-w-full custom-scrollbar animate-fadeIn text-slate-100 flex flex-col items-center">
+      <div className="relative w-full max-w-2xl min-h-screen pb-24 flex flex-col overflow-x-hidden">
         {/* Top Backdrop Image */}
         <div className="relative w-full h-72 sm:h-84 md:h-96 bg-black overflow-hidden flex-shrink-0">
           <img
@@ -365,40 +393,43 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
                   <div
                     key={idx}
                     onClick={() => handleStartPlay(ep.link, `${item.title} - ${ep.title}`)}
-                    className="w-full p-3 rounded-xl bg-[#18181b] border border-zinc-800/80 hover:border-zinc-700 flex items-center justify-between cursor-pointer active:scale-[0.99] transition-all group"
+                    className="w-full p-3 rounded-xl bg-[#18181b] border border-zinc-800/80 hover:border-zinc-700 flex items-center justify-between cursor-pointer active:scale-[0.99] transition-all group overflow-hidden"
                   >
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
                       <div className="w-8 h-8 rounded-full bg-[#ff9999] group-hover:bg-[#ff8a80] text-zinc-950 flex items-center justify-center shadow-md flex-shrink-0 transition-transform group-hover:scale-105">
                         <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
                       </div>
-                      <span className="text-sm font-semibold text-white group-hover:text-[#ff8a80] transition-colors truncate">
+                      <span className="text-sm font-semibold text-white group-hover:text-[#ff8a80] transition-colors truncate block min-w-0">
                         {ep.title || `Episode ${idx + 1}`}
                       </span>
                     </div>
 
-                    <a
-                      href={ep.link}
-                      download
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-2 rounded-lg text-zinc-400 hover:text-white transition-colors"
+                    <button
+                      onClick={(e) => handleDownloadEpisode(ep, e)}
+                      disabled={downloadingEpLink === ep.link}
+                      className="p-2 rounded-lg text-zinc-400 hover:text-white transition-colors flex-shrink-0 disabled:opacity-50"
                       title="Download Episode"
                     >
-                      <Download className="w-4 h-4" />
-                    </a>
+                      {downloadingEpLink === ep.link ? (
+                        <Loader2 className="w-4 h-4 animate-spin text-[#ff8a80]" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                    </button>
                   </div>
                 ))
               ) : (
                 <div
                   onClick={() => handleStartPlay()}
-                  className="w-full p-3.5 rounded-xl bg-[#18181b] border border-zinc-800 flex items-center justify-between cursor-pointer hover:border-zinc-700"
+                  className="w-full p-3.5 rounded-xl bg-[#18181b] border border-zinc-800 flex items-center justify-between cursor-pointer hover:border-zinc-700 overflow-hidden"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-[#ff9999] text-zinc-950 flex items-center justify-center shadow-md">
+                  <div className="flex items-center gap-3 min-w-0 flex-1 mr-2">
+                    <div className="w-8 h-8 rounded-full bg-[#ff9999] text-zinc-950 flex items-center justify-center shadow-md flex-shrink-0">
                       <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
                     </div>
-                    <span className="text-sm font-semibold text-white">Episode 1</span>
+                    <span className="text-sm font-semibold text-white truncate block min-w-0">Episode 1</span>
                   </div>
-                  <Download className="w-4 h-4 text-zinc-400" />
+                  <Download className="w-4 h-4 text-zinc-400 flex-shrink-0" />
                 </div>
               )}
             </div>
