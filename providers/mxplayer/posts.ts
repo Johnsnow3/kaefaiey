@@ -52,9 +52,16 @@ export async function getPosts({
   const userId = await getUserID(axios);
   const endParam = getEndParam(userId);
   
-  // Default to Hindi Movies if no filter
-  const queryParams = filter || "browseLangFilterIds=hi&type=1";
-  
+  // Map generic filters to valid MX browse parameters
+  let queryParams = "browseLangFilterIds=hi&type=1";
+  if (filter && filter.includes("=")) {
+    queryParams = filter;
+  } else if (filter === "series" || filter === "tv" || filter === "shows") {
+    queryParams = "genreFilterIds=48efa872f6f17facebf6149dfc536ee1&type=2";
+  } else if (filter === "movie" || filter === "movies") {
+    queryParams = "browseLangFilterIds=hi&type=1";
+  }
+
   // Pagination logic from Kotlin: pageNum and pageSize
   const url = `${API_URL}/detail/browseItem?pageNum=${page}&pageSize=20&isCustomized=true&${queryParams}${endParam}`;
 

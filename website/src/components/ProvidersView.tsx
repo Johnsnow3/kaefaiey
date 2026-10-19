@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   RotateCw,
   GitBranch,
-  Plus,
   Globe,
   User,
   Download,
@@ -33,8 +32,6 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 }) => {
   const [healthMap, setHealthMap] = useState<Record<string, ProviderHealth>>({});
   const [testingAll, setTestingAll] = useState(false);
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [customSource, setCustomSource] = useState("");
 
   const handleTest = async (e: React.MouseEvent, providerId: string) => {
     e.stopPropagation();
@@ -110,41 +107,30 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
           Provider source
         </span>
 
-        <div className="flex items-center gap-2.5">
-          {/* Active Source dropdown pill */}
-          <div className="flex-1 p-3.5 rounded-2xl bg-[#141416] border border-zinc-800/90 flex items-center justify-between shadow-sm cursor-default">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-zinc-800/90 border border-zinc-700/60 flex items-center justify-center text-zinc-300">
-                <GitBranch className="w-4 h-4" />
-              </div>
-              <div>
-                <span className="text-[11px] text-zinc-400 block font-medium leading-tight">
-                  Active source
-                </span>
-                <span className="text-sm font-bold text-white block leading-tight mt-0.5">
-                  John Snow
-                </span>
-              </div>
+        {/* Active Source dropdown pill */}
+        <div className="w-full p-3.5 rounded-2xl bg-[#141416] border border-zinc-800/90 flex items-center justify-between shadow-sm cursor-default">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-zinc-800/90 border border-zinc-700/60 flex items-center justify-center text-zinc-300">
+              <GitBranch className="w-4 h-4" />
             </div>
-
-            <svg
-              className="w-4 h-4 text-zinc-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
+            <div>
+              <span className="text-[11px] text-zinc-400 block font-medium leading-tight">
+                Active source
+              </span>
+              <span className="text-sm font-bold text-white block leading-tight mt-0.5">
+                John Snow
+              </span>
+            </div>
           </div>
 
-          {/* Plus Add button */}
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="w-14 h-14 rounded-2xl border border-zinc-800 bg-[#141416] hover:bg-zinc-800/80 hover:border-zinc-700 flex items-center justify-center text-white active:scale-95 transition-all shadow-sm"
-            title="Add Custom Source"
+          <svg
+            className="w-4 h-4 text-zinc-400"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
           >
-            <Plus className="w-6 h-6 stroke-[2.2]" />
-          </button>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
       </div>
 
@@ -265,48 +251,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
           })}
         </div>
       </div>
-
-      {/* Add Custom Source Modal */}
-      {showAddModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
-          onClick={() => setShowAddModal(false)}
-        >
-          <div
-            className="w-full max-w-md bg-[#141416] border border-zinc-800 rounded-3xl p-6 space-y-4 text-white shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="text-lg font-bold text-white">Add Provider Repository</h3>
-            <p className="text-xs text-zinc-400">
-              Enter a custom GitHub repository URL containing a Vega-compatible manifest.json.
-            </p>
-            <input
-              type="text"
-              value={customSource}
-              onChange={(e) => setCustomSource(e.target.value)}
-              placeholder="https://github.com/Johnsnow3/vega-providers"
-              className="w-full p-3.5 rounded-xl bg-zinc-900 border border-zinc-800 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-rose-500"
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="px-4 py-2.5 rounded-xl bg-zinc-800 text-xs font-bold text-zinc-300 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  alert("Custom repository added successfully!");
-                  setShowAddModal(false);
-                }}
-                className="px-5 py-2.5 rounded-xl bg-white text-zinc-950 text-xs font-extrabold shadow-lg hover:bg-zinc-200"
-              >
-                Add Source
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
+

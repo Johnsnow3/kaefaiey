@@ -14,6 +14,46 @@ function formatImageUrl(url?: string): string {
   return `${IMAGE_URL}${url.replace(/^\/+/, "")}`;
 }
 
+function extractJson(text: string, startKey: string): any {
+  if (!text || typeof text !== "string") return null;
+  const kIdx = text.indexOf(startKey);
+  if (kIdx === -1) return null;
+  const start = text.indexOf("{", kIdx);
+  if (start === -1) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\") {
+      escape = true;
+      continue;
+    }
+    if (c === "\"" && !escape) {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.substring(start, i + 1));
+          } catch {
+            return null;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export const getMeta = async function ({
   link,
   providerContext,
@@ -25,28 +65,17 @@ export const getMeta = async function ({
 
   try {
     const res = await axios.get(link, { headers: defaultHeaders });
-    const $ = cheerio.load(res.data);
+    const rawHtml = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
+    const $ = cheerio.load(rawHtml);
 
     let mxsEntity: any = null;
-    $("script").each((_: any, el: any) => {
-      const text = $(el).html() || "";
-      if (text.includes("window.__mxs__")) {
-        try {
-          const jsonText = text
-            .replace(/^window\.__mxs__\s*=\s*/, "")
-            .replace(/;?\s*$/, "");
-          const parsed = JSON.parse(jsonText);
-          const entities = parsed?.entities || {};
-          const matchId = link.match(
-            /\/detail\/(?:movie|tvshow|show)\/([a-zA-Z0-9_-]+)/i
-          )?.[1];
-          mxsEntity =
-            (matchId && entities[matchId]) || Object.values(entities)[0];
-        } catch {
-          // ignore
-        }
-      }
-    });
+    const parsedState = extractJson(rawHtml, "window.__mxs__");
+    if (parsedState?.entities) {
+      const matchId = link.match(
+        /\/detail\/(?:movie|tvshow|show|episode)\/([a-zA-Z0-9_-]+)/i
+      )?.[1];
+      mxsEntity = (matchId && parsedState.entities[matchId]) || Object.values(parsedState.entities)[0];
+    }
 
     // ── Extract Landscape Background ──
     let image = "";
@@ -117,18 +146,40 @@ export const getMeta = async function ({
       }
     }
 
-    const title =
+    let rawTitle =
       mxsEntity?.title ||
       $("h1").first().text().trim() ||
       $('meta[property="og:title"]').attr("content") ||
       "";
 
-    const synopsis =
+    // Clean up generic SEO titles if extracted from meta tag
+    if (rawTitle.toLowerCase().includes("online on amazon mx player")) {
+      rawTitle = rawTitle
+        .replace(/^Watch\s+/i, "")
+        .replace(/\s+(?:Serial\s+)?All\s+Latest\s+Episodes.*$/i, "")
+        .replace(/\s+Online\s+on\s+Amazon.*$/i, "")
+        .trim();
+    }
+    if (rawTitle.toLowerCase() === "oops!" || rawTitle.toLowerCase() === "oops") {
+      rawTitle = "";
+    }
+    const title = rawTitle;
+
+    let rawSynopsis =
       mxsEntity?.description ||
       $('meta[property="og:description"]').attr("content") ||
       $('meta[name="description"]').attr("content") ||
       $(".description").text().trim() ||
       "";
+
+    // Ignore generic MX Player slogan
+    if (
+      rawSynopsis.includes("MXPlay is a video streaming service") ||
+      rawSynopsis.toLowerCase().includes("we couldn't find what you're looking for")
+    ) {
+      rawSynopsis = mxsEntity?.descriptor || "";
+    }
+    const synopsis = rawSynopsis;
 
     const rating = mxsEntity?.rating ? String(mxsEntity.rating) : undefined;
     const tags = mxsEntity?.genres || undefined;
@@ -147,29 +198,58 @@ export const getMeta = async function ({
     }
 
     const linkList: any[] = [];
-    const seasonTabs = $("div.hs__items-container > div");
 
-    if (seasonTabs.length > 0) {
-      type = "series";
-      seasonTabs.each((_: any, el: any) => {
-        const tabId = $(el).attr("data-id");
-        const tabText = $(el).text().trim();
-        const tabIndex = $(el).attr("data-tab");
+    // ── Extract Seasons from mxsEntity tabs ──
+    if (mxsEntity?.tabs && Array.isArray(mxsEntity.tabs)) {
+      const epTab = mxsEntity.tabs.find(
+        (t: any) =>
+          t.type === "tvshowepisodes" ||
+          t.title === "EPISODES" ||
+          (t.containers && t.containers.length > 0)
+      );
 
-        if (tabId) {
-          const seasonTitle =
-            tabText ||
-            (tabIndex ? `Season ${tabIndex}` : "Season 1");
+      if (epTab?.containers && Array.isArray(epTab.containers) && epTab.containers.length > 0) {
+        type = "series";
+        // Sort seasons in logical order (Season 1, 2, 3...)
+        const sorted = [...epTab.containers].sort(
+          (a: any, b: any) => (a.sequence || 0) - (b.sequence || 0)
+        );
+        sorted.forEach((season: any) => {
           linkList.push({
-            title: seasonTitle,
+            title: season.title || `Season ${season.sequence || 1}`,
             quality: "Standard",
-            episodesLink: tabId,
+            episodesLink: season.id,
             directLinks: [],
           });
-        }
-      });
+        });
+      }
     }
 
+    // Fallback: DOM season tabs
+    if (linkList.length === 0) {
+      const seasonTabs = $("div.hs__items-container > div");
+      if (seasonTabs.length > 0) {
+        type = "series";
+        seasonTabs.each((_: any, el: any) => {
+          const tabId = $(el).attr("data-id");
+          const tabText = $(el).text().trim();
+          const tabIndex = $(el).attr("data-tab");
+
+          if (tabId) {
+            const seasonTitle =
+              tabText || (tabIndex ? `Season ${tabIndex}` : "Season 1");
+            linkList.push({
+              title: seasonTitle,
+              quality: "Standard",
+              episodesLink: tabId,
+              directLinks: [],
+            });
+          }
+        });
+      }
+    }
+
+    // Movie fallback
     if (type === "movie" || linkList.length === 0) {
       linkList.push({
         title: "Movie",
