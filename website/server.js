@@ -5,6 +5,7 @@ const fs = require("fs");
 const os = require("os");
 const axios = require("axios");
 const cheerio = require("cheerio");
+const http2 = require("http2");
 
 // ─── Log Rate Limiter (Protects against Railway 500 logs/sec limit) ─────────
 const origLog = console.log;
@@ -686,6 +687,88 @@ app.options("/api/proxy/stream", (req, res) => {
   res.sendStatus(204);
 });
 
+function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, res) {
+  try {
+    const parsed = new URL(targetUrl);
+    const client = http2.connect(`${parsed.protocol}//${parsed.host}`);
+
+    client.on("error", (err) => {
+      if (!res.headersSent && !res.writableEnded) {
+        res.status(502).json({ error: `HTTP2 stream proxy failed: ${err.message}` });
+      }
+    });
+
+    const originReferer = reqHeaders["Referer"] || `${parsed.protocol}//${parsed.host}/`;
+    const http2Headers = {
+      ":method": method === "HEAD" ? "HEAD" : "GET",
+      ":path": `${parsed.pathname}${parsed.search}`,
+      "user-agent": reqHeaders["User-Agent"] || defaultBrowserHeaders["User-Agent"],
+      "referer": originReferer,
+      "origin": originReferer.replace(/\/+$/, ""),
+      "accept": "*/*",
+    };
+
+    if (reqHeaders["Range"]) {
+      http2Headers["range"] = reqHeaders["Range"];
+    }
+
+    const h2Req = client.request(http2Headers);
+
+    h2Req.on("response", (headers) => {
+      const status = Number(headers[":status"]) || 200;
+      res.status(status);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+
+      ["content-type", "content-length", "content-range", "accept-ranges"].forEach((h) => {
+        if (headers[h]) res.setHeader(h, headers[h]);
+      });
+
+      if (isDownload) {
+        res.setHeader("Content-Disposition", `attachment; filename="${String(filename || "video.mp4").replace(/"/g, "")}"`);
+      } else {
+        res.setHeader("Content-Disposition", "inline");
+      }
+
+      const currType = (headers["content-type"] || "").toLowerCase();
+      if (!currType || currType.includes("octet-stream")) {
+        res.setHeader("Content-Type", "video/mp4");
+      }
+
+      if (!headers["accept-ranges"]) {
+        res.setHeader("Accept-Ranges", "bytes");
+      }
+
+      if (method === "HEAD") {
+        res.end();
+        try { client.close(); } catch {}
+      }
+    });
+
+    h2Req.pipe(res);
+
+    h2Req.on("end", () => {
+      try { client.close(); } catch {}
+    });
+
+    h2Req.on("error", () => {
+      try { client.close(); } catch {}
+    });
+
+    res.on("close", () => {
+      try {
+        h2Req.destroy();
+        client.close();
+      } catch {}
+    });
+  } catch (err) {
+    if (!res.headersSent && !res.writableEnded) {
+      res.status(502).json({ error: `HTTP2 setup failed: ${err.message}` });
+    }
+  }
+}
+
 app.all("/api/proxy/stream", async (req, res) => {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -699,6 +782,9 @@ app.all("/api/proxy/stream", async (req, res) => {
     return res.status(400).json({ error: "Query parameter 'url' is required." });
   }
 
+  const isDownload = req.query.download === "1" || req.query.download === "true";
+  const filename = req.query.filename || "video.mp4";
+
   try {
     const targetUrl = String(url);
     let originReferer = referer ? String(referer) : "";
@@ -710,6 +796,7 @@ app.all("/api/proxy/stream", async (req, res) => {
     const reqHeaders = {
       "User-Agent": defaultBrowserHeaders["User-Agent"],
       Referer: originReferer || targetUrl,
+      Origin: originReferer.replace(/\/+$/, "") || targetUrl,
       Accept: "*/*",
       "Accept-Encoding": "identity",
     };
@@ -763,16 +850,36 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     }
 
+    // ─── HTTP/2 Preferred Hosts (e.g. MovieBox / Alibaba Tengine OSS CDN) ───
+    const isHttp2Preferred =
+      targetUrl.includes("hakunaymatata.com") ||
+      targetUrl.includes("aoneroom.com") ||
+      targetUrl.includes("alibabacdn") ||
+      targetUrl.includes("alicdn");
+
+    if (isHttp2Preferred && !isM3u8Url) {
+      return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, res);
+    }
+
     // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS) ─────────────────
-    const streamRes = await axios({
-      method: req.method === "HEAD" ? "head" : "get",
-      url: targetUrl,
-      responseType: "stream",
-      headers: reqHeaders,
-      timeout: 35000,
-      maxRedirects: 5,
-      validateStatus: (status) => status >= 200 && status < 400,
-    });
+    let streamRes;
+    try {
+      streamRes = await axios({
+        method: req.method === "HEAD" ? "head" : "get",
+        url: targetUrl,
+        responseType: "stream",
+        headers: reqHeaders,
+        timeout: 35000,
+        maxRedirects: 5,
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
+    } catch (axiosErr) {
+      // If server returned 426 Upgrade Required, automatically retry over HTTP/2
+      if (axiosErr.response?.status === 426 && !isM3u8Url && !res.headersSent) {
+        return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, res);
+      }
+      throw axiosErr;
+    }
 
     res.status(streamRes.status);
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -784,7 +891,6 @@ app.all("/api/proxy/stream", async (req, res) => {
       "content-length",
       "content-range",
       "accept-ranges",
-      "content-disposition",
     ];
 
     forwardHeaders.forEach((h) => {
@@ -793,9 +899,10 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     });
 
-    if (req.query.download === "1" || req.query.download === "true") {
-      const filename = req.query.filename || "video.mp4";
+    if (isDownload) {
       res.setHeader("Content-Disposition", `attachment; filename="${String(filename).replace(/"/g, '')}"`);
+    } else {
+      res.setHeader("Content-Disposition", "inline");
     }
 
     // Ensure browser recognises video if upstream sent octet-stream

@@ -1138,6 +1138,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Fallback Notice Overlay (VLC / MX Player) */}
       {playbackNotice && (
         <div className="absolute inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-fadeIn">
+          {/* Top Back Navigation Button */}
+          <button
+            onClick={onClose}
+            className="absolute top-4 left-4 p-2.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all flex items-center gap-2 active:scale-95 shadow-md z-10"
+            title="Go Back"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            <span className="text-xs font-semibold pr-1">Back</span>
+          </button>
+
           <div className="w-14 h-14 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 mb-4 shadow-xl">
             <AlertTriangle className="w-7 h-7" />
           </div>
@@ -1170,6 +1180,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <Download className="w-3.5 h-3.5" />
               Direct Download
             </a>
+            <button
+              onClick={onClose}
+              className="px-4 py-2.5 rounded-xl font-bold text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white flex items-center gap-2 transition-all shadow-lg border border-zinc-700"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              Back
+            </button>
           </div>
         </div>
       )}
