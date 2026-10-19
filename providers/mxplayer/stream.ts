@@ -5,49 +5,10 @@ const API_URL = "https://api.mxplayer.in/v1/web";
 
 const defaultHeaders = {
   Referer: "https://www.mxplayer.in/",
+  Origin: "https://www.mxplayer.in",
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 };
-
-function extractJson(text: string, startKey: string): any {
-  if (!text || typeof text !== "string") return null;
-  const kIdx = text.indexOf(startKey);
-  if (kIdx === -1) return null;
-  const start = text.indexOf("{", kIdx);
-  if (start === -1) return null;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (c === "\\") {
-      escape = true;
-      continue;
-    }
-    if (c === "\"" && !escape) {
-      inString = !inString;
-      continue;
-    }
-    if (!inString) {
-      if (c === "{") depth++;
-      else if (c === "}") {
-        depth--;
-        if (depth === 0) {
-          try {
-            return JSON.parse(text.substring(start, i + 1));
-          } catch {
-            return null;
-          }
-        }
-      }
-    }
-  }
-  return null;
-}
 
 export const getStream = async function ({
   link,
@@ -80,8 +41,7 @@ export const getStream = async function ({
   // ===============================
   else {
     try {
-      const isMovieUrl = link.includes("/movie/") || type === "movie";
-      const isShowUrl = link.includes("/tvshow/") || link.includes("/show/") || type === "series";
+      const isShow = link.includes("/tvshow/") || link.includes("/show/") || type === "series";
 
       // Extract ID from URL if present
       const idMatch =
@@ -91,94 +51,60 @@ export const getStream = async function ({
 
       const id = idMatch ? idMatch[1] : null;
 
-      // ── Sub-case A: Movie ID / URL ──
-      if (id && isMovieUrl) {
-        // 1. Try movie recommended API
+      if (id && !isShow) {
+        // ── Movie Stream Extraction ──
+        // 1. Direct REST video endpoint (contains direct thirdParty and HLS stream)
         try {
-          const apiUrl = `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}`;
-          const res = await axios.get(apiUrl, { headers: defaultHeaders });
-          streamObj = res.data?.items?.[0]?.stream || null;
+          const videoApi = `${API_URL}/detail/video?id=${id}&type=movie`;
+          const res = await axios.get(videoApi, { headers: defaultHeaders });
+          streamObj = res.data?.stream || null;
         } catch {
-          // fallback to page scrape
+          // ignore
         }
 
-        // 2. Fallback: Scrape movie page HTML state
-        if (!streamObj) {
-          const pageUrl = link.startsWith("http")
-            ? link
-            : `https://www.mxplayer.in/detail/movie/${id}`;
-          const pageRes = await axios.get(pageUrl, { headers: defaultHeaders });
-          const rawHtml =
-            typeof pageRes.data === "string"
-              ? pageRes.data
-              : JSON.stringify(pageRes.data);
-          const parsed = extractJson(rawHtml, "window.__mxs__");
-          const entity =
-            (parsed?.entities && (parsed.entities[id] || Object.values(parsed.entities)[0])) || null;
-          streamObj = entity?.stream || null;
+        // 2. Fallback: Movie recommended endpoint
+        if (!streamObj || (!streamObj.hls && !streamObj.thirdParty && !streamObj.mxplay)) {
+          try {
+            const apiUrl = `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}`;
+            const res = await axios.get(apiUrl, { headers: defaultHeaders });
+            streamObj = res.data?.items?.[0]?.stream || streamObj;
+          } catch {
+            // ignore
+          }
         }
-      }
-
-      // ── Sub-case B: TV Show URL / ID ──
-      else if (id && isShowUrl) {
-        // Scrape TV show page to get season and first episode
-        const pageUrl = link.startsWith("http")
-          ? link
-          : `https://www.mxplayer.in/detail/tvshow/${id}`;
-        const pageRes = await axios.get(pageUrl, { headers: defaultHeaders });
-        const rawHtml =
-          typeof pageRes.data === "string"
-            ? pageRes.data
-            : JSON.stringify(pageRes.data);
-        const parsed = extractJson(rawHtml, "window.__mxs__");
-        const entity =
-          (parsed?.entities && (parsed.entities[id] || Object.values(parsed.entities)[0])) || null;
-
+      } else if (id && isShow) {
+        // ── TV Show / Series Stream Extraction ──
+        // 1. Query seasons to get Season 1 ID
         let seasonId = id;
-        const epTab = entity?.tabs?.find(
-          (t: any) =>
-            t.type === "tvshowepisodes" ||
-            t.title === "EPISODES" ||
-            (t.containers && t.containers.length > 0)
-        );
-
-        if (epTab?.containers && epTab.containers.length > 0) {
-          // Find Season 1 (or lowest sequence container)
-          const sorted = [...epTab.containers].sort(
-            (a: any, b: any) => (a.sequence || 0) - (b.sequence || 0)
-          );
-          seasonId = sorted[0]?.id || seasonId;
+        try {
+          const seasonsUrl = `${API_URL}/detail/tab/tvshowseasons?type=tvshow&id=${id}&device-density=2&platform=com.mxplay.desktop&content-languages=hi,en`;
+          const sRes = await axios.get(seasonsUrl, { headers: defaultHeaders });
+          const items = sRes.data?.items || [];
+          const season1 = items.find((s: any) => s.sequence === 1) || items[0];
+          if (season1?.id) {
+            seasonId = season1.id;
+          }
+        } catch {
+          // ignore
         }
 
-        // Query episodes for this season
+        // 2. Query episodes for this season to get Episode 1 stream
         try {
           const epApi = `${API_URL}/detail/tab/tvshowepisodes?type=season&id=${seasonId}&sortOrder=0&device-density=2&platform=com.mxplay.desktop&content-languages=hi,en`;
           const epRes = await axios.get(epApi, { headers: defaultHeaders });
           const items = epRes.data?.items || [];
           streamObj = items[0]?.stream || null;
-        } catch (err) {
-          console.error("MX episodes query error:", err);
+        } catch {
+          // ignore
         }
-      }
-
-      // ── Sub-case C: Raw Season ID fallback ──
-      else if (id) {
+      } else if (id) {
+        // ── Raw Season/Episode ID ──
         try {
           const epApi = `${API_URL}/detail/tab/tvshowepisodes?type=season&id=${id}&sortOrder=0&device-density=2&platform=com.mxplay.desktop&content-languages=hi,en`;
           const epRes = await axios.get(epApi, { headers: defaultHeaders });
           streamObj = epRes.data?.items?.[0]?.stream || null;
         } catch {
           // ignore
-        }
-
-        if (!streamObj) {
-          try {
-            const apiUrl = `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}`;
-            const res = await axios.get(apiUrl, { headers: defaultHeaders });
-            streamObj = res.data?.items?.[0]?.stream || null;
-          } catch {
-            // ignore
-          }
         }
       }
     } catch (e) {
@@ -192,68 +118,54 @@ export const getStream = async function ({
   if (streamObj) {
     const seenUrls = new Set<string>();
 
-    const extract = (obj: any, label: string) => {
-      if (!obj) return;
-
-      ["high", "base", "main"].forEach((q) => {
-        const url = obj[q];
-        if (url) {
-          const fullUrl = normalizeUrl(url);
-          if (!seenUrls.has(fullUrl)) {
-            seenUrls.add(fullUrl);
-            streamLinks.push({
-              server: `MX ${label.toUpperCase()} ${q.toUpperCase()}`,
-              link: fullUrl,
-              type: label === "hls" ? "m3u8" : "dash",
-              headers: {
-                Referer: "https://www.mxplayer.in/",
-              },
-            });
-          }
-        }
-      });
+    const addStream = (url: string, label: string, streamType: string) => {
+      if (!url) return;
+      const fullUrl = normalizeUrl(url);
+      if (!seenUrls.has(fullUrl)) {
+        seenUrls.add(fullUrl);
+        streamLinks.push({
+          server: label,
+          link: fullUrl,
+          type: streamType,
+          headers: {
+            Referer: "https://www.mxplayer.in/",
+          },
+        });
+      }
     };
 
-    // Direct HLS & DASH
-    if (streamObj.hls) extract(streamObj.hls, "hls");
-    if (streamObj.dash) extract(streamObj.dash, "dash");
-
-    // MXPlay nested HLS & DASH
-    if (streamObj.mxplay) {
-      if (streamObj.mxplay.hls) extract(streamObj.mxplay.hls, "hls");
-      if (streamObj.mxplay.dash) extract(streamObj.mxplay.dash, "dash");
-    }
-
-    // Third-party streams
+    // 1. Third-party direct stream (e.g. Dybbuk and Prime syndications)
     if (streamObj.thirdParty) {
       if (streamObj.thirdParty.hlsUrl) {
-        const fullUrl = normalizeUrl(streamObj.thirdParty.hlsUrl);
-        if (!seenUrls.has(fullUrl)) {
-          seenUrls.add(fullUrl);
-          streamLinks.push({
-            server: "ThirdParty HLS",
-            link: fullUrl,
-            type: "m3u8",
-            headers: {
-              Referer: "https://www.mxplayer.in/",
-            },
-          });
-        }
+        addStream(streamObj.thirdParty.hlsUrl, "MX HLS 1080p", "m3u8");
       }
       if (streamObj.thirdParty.dashUrl) {
-        const fullUrl = normalizeUrl(streamObj.thirdParty.dashUrl);
-        if (!seenUrls.has(fullUrl)) {
-          seenUrls.add(fullUrl);
-          streamLinks.push({
-            server: "ThirdParty DASH",
-            link: fullUrl,
-            type: "dash",
-            headers: {
-              Referer: "https://www.mxplayer.in/",
-            },
-          });
-        }
+        addStream(streamObj.thirdParty.dashUrl, "MX DASH 1080p", "dash");
       }
+    }
+
+    // 2. Standard HLS & DASH
+    ["high", "base", "main"].forEach((q) => {
+      const labelQual = q === "high" ? "1080p" : q === "base" ? "720p" : "480p";
+      if (streamObj.hls && streamObj.hls[q]) {
+        addStream(streamObj.hls[q], `MX HLS ${labelQual}`, "m3u8");
+      }
+      if (streamObj.dash && streamObj.dash[q]) {
+        addStream(streamObj.dash[q], `MX DASH ${labelQual}`, "dash");
+      }
+    });
+
+    // 3. MXPlay Nested HLS & DASH
+    if (streamObj.mxplay) {
+      ["high", "base", "main"].forEach((q) => {
+        const labelQual = q === "high" ? "1080p" : q === "base" ? "720p" : "480p";
+        if (streamObj.mxplay.hls && streamObj.mxplay.hls[q]) {
+          addStream(streamObj.mxplay.hls[q], `MX HLS ${labelQual}`, "m3u8");
+        }
+        if (streamObj.mxplay.dash && streamObj.mxplay.dash[q]) {
+          addStream(streamObj.mxplay.dash[q], `MX DASH ${labelQual}`, "dash");
+        }
+      });
     }
   }
 

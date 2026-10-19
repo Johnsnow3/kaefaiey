@@ -293,7 +293,8 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
             ) : (
               <p className="text-xs sm:text-sm text-zinc-300 leading-relaxed font-normal">
                 {meta?.synopsis ||
-                  "Two strangers enter into a marriage neither wants, but a confession prompts them to flee the wedding celebration, throwing their families into chaos."}
+                  (item as any).description ||
+                  "Watch full high-definition streaming for this title with multi-audio and subtitle tracks."}
               </p>
             )}
           </div>
