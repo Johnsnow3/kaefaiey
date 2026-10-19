@@ -20,6 +20,7 @@ import { MediaDetails } from "./components/MediaDetails";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { WatchlistView } from "./components/WatchlistView";
 import { DownloadsView } from "./components/DownloadsView";
+import { ProvidersView } from "./components/ProvidersView";
 import { BottomNav, NavTab } from "./components/BottomNav";
 import { Post, Provider, MediaStream, CatalogCategory } from "./types";
 import {
@@ -289,7 +290,7 @@ export const App: React.FC = () => {
           if (navTab !== "search") setNavTab("search");
         }}
         activeProvider={activeProvider}
-        onOpenProviders={() => setIsSidebarOpen(true)}
+        onOpenProviders={() => setNavTab("settings")}
         watchlistCount={watchlistCount}
       />
 
@@ -545,49 +546,21 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* ===================== TAB 5: SETTINGS ===================== */}
+        {/* ===================== TAB 5: PROVIDERS & SETTINGS ===================== */}
         {navTab === "settings" && (
-          <div className="w-full max-w-3xl mx-auto p-4 sm:p-6 space-y-6 animate-fadeIn pb-24 text-white">
-            <div className="flex items-center justify-between pb-4 border-b border-zinc-800">
-              <div>
-                <h1 className="text-xl font-bold text-white">Settings & Providers</h1>
-                <p className="text-xs text-zinc-400">Manage streaming sources and preferences</p>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="p-4 rounded-2xl bg-[#141416] border border-zinc-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-sm font-bold block text-white">Active Content Provider</span>
-                    <span className="text-xs text-zinc-400">Current source for movies, series & anime</span>
-                  </div>
-                  <span className="px-3 py-1 rounded-full bg-rose-600/20 text-[#ff4d4d] border border-rose-500/30 text-xs font-mono font-bold">
-                    {activeProvider}
-                  </span>
-                </div>
-
-                <button
-                  onClick={() => setIsSidebarOpen(true)}
-                  className="w-full py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Layers className="w-4 h-4" />
-                  <span>Browse All 60+ Providers & Run Live Tests</span>
-                </button>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-[#141416] border border-zinc-800 space-y-2">
-                <span className="text-sm font-bold block text-white">Player & Stream Engine</span>
-                <p className="text-xs text-zinc-400">
-                  Built-in Hls.js engine with server-side proxy rewriter for CORS bypass and custom Referer authorization.
-                </p>
-                <div className="flex items-center gap-2 pt-2 text-xs text-emerald-400">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>M3U8 HLS Rewriter & MKV Stream Proxy Active</span>
-                </div>
-              </div>
-            </div>
-          </div>
+          <ProvidersView
+            providers={providers}
+            activeProvider={activeProvider}
+            onSelectProvider={(provId) => {
+              handleProviderSelect(provId);
+              setNavTab("home");
+            }}
+            onBack={() => setNavTab("home")}
+            onRefresh={async () => {
+              const provs = await fetchProviders();
+              setProviders(provs);
+            }}
+          />
         )}
       </main>
 

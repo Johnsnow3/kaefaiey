@@ -1,6 +1,12 @@
+import { getBaseUrl } from "../getBaseUrl";
 import { ProviderContext } from "../types";
 
 export const providerValue = "movieBoxWeb";
+export const defaultBaseUrl = "https://officialmoviebox.com";
+
+export async function getProviderBaseUrl(): Promise<string> {
+  return defaultBaseUrl;
+}
 
 export type MovieBoxSubject = {
   subjectId?: string;
@@ -49,6 +55,8 @@ export type PlaybackLink = {
   episode?: number;
   resolution?: number;
   seasons?: MovieBoxResource["seasons"];
+  fallbackSubjectId?: string;
+  fallbackDetailPath?: string;
 };
 
 export function parseNuxtDetail(
@@ -162,20 +170,21 @@ export function encodeLink(value: PlaybackLink): string {
   return JSON.stringify(value);
 }
 
-export function decodeLink(value: string | any): PlaybackLink {
-  if (typeof value === "object" && value !== null) return value as PlaybackLink;
+export function decodeLink(value: string): PlaybackLink {
+  if (value && typeof value === "object") {
+    return value as PlaybackLink;
+  }
   try {
     return JSON.parse(value) as PlaybackLink;
   } catch {
-    try {
-      return JSON.parse(decodeURIComponent(value)) as PlaybackLink;
-    } catch {
-      return {
-        subjectId: String(value || ""),
-        detailPath: "",
-        language: "Original",
-      };
-    }
+    const dp = detailPath(String(value || ""));
+    return {
+      subjectId: "",
+      detailPath: dp,
+      language: "Original",
+      season: 1,
+      episode: 1,
+    };
   }
 }
 

@@ -375,6 +375,21 @@ app.use((req, res, next) => {
 
 // Serve frontend static files
 app.use(express.static(path.join(__dirname, "public")));
+app.use("/assets", express.static(path.join(__dirname, "..", "assets")));
+
+// ─── Manifest & Metadata ────────────────────────────────────────────────────
+const manifestPath = path.join(__dirname, "..", "manifest.json");
+function loadManifest() {
+  try {
+    if (fs.existsSync(manifestPath)) {
+      return JSON.parse(fs.readFileSync(manifestPath, "utf-8"));
+    }
+  } catch (e) {
+    console.warn("Could not load manifest.json:", e.message);
+  }
+  return [];
+}
+let manifest = loadManifest();
 
 // ─── Health & System Endpoints ──────────────────────────────────────────────
 app.get("/api/health", (req, res) => {
@@ -395,27 +410,43 @@ app.get("/api/health", (req, res) => {
 
 // ─── Providers Metadata Endpoints ────────────────────────────────────────────
 app.get("/api/providers", (req, res) => {
-  const list = Object.entries(providers).map(([key, p]) => {
-    const urlKey = Object.keys(urls).find(
-      (k) => k.toLowerCase() === key.toLowerCase(),
-    );
-    return {
-      id: key,
-      name: key,
-      endpoints: p.supportedEndpoints,
-      hasCatalog: p.supportedEndpoints.includes("catalog"),
-      hasPosts: p.supportedEndpoints.includes("posts"),
-      hasMeta: p.supportedEndpoints.includes("meta"),
-      hasStream: p.supportedEndpoints.includes("stream"),
-      hasEpisodes: p.supportedEndpoints.includes("episodes"),
-      hasSettings: p.supportedEndpoints.includes("settings"),
-      url: urls[urlKey]?.url || urls[key]?.url || null,
-    };
-  });
+  const enabledManifest = manifest.filter((m) => !m.disabled);
+
+  // Map the 36 curated providers in exact order with logos and author
+  const list = enabledManifest
+    .map((m) => {
+      const p = providers[m.value];
+      if (!p) return null;
+      const urlKey = Object.keys(urls).find(
+        (k) => k.toLowerCase() === m.value.toLowerCase(),
+      );
+
+      const iconFilename = path.basename(m.icon || "");
+      const localIcon = `/assets/${iconFilename || m.value + ".png"}`;
+
+      return {
+        id: m.value,
+        name: m.value,
+        displayName: m.display_name || m.value,
+        version: m.version ? `v${m.version.replace(/^v/, "")}` : "v1.0",
+        icon: localIcon,
+        region: m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : "Global",
+        author: "John Snow",
+        endpoints: p.supportedEndpoints,
+        hasCatalog: p.supportedEndpoints.includes("catalog"),
+        hasPosts: p.supportedEndpoints.includes("posts"),
+        hasMeta: p.supportedEndpoints.includes("meta"),
+        hasStream: p.supportedEndpoints.includes("stream"),
+        hasEpisodes: p.supportedEndpoints.includes("episodes"),
+        hasSettings: p.supportedEndpoints.includes("settings"),
+        url: urls[urlKey]?.url || urls[m.value]?.url || null,
+      };
+    })
+    .filter(Boolean);
 
   res.json({
     total: list.length,
-    providers: list.sort((a, b) => a.name.localeCompare(b.name)),
+    providers: list,
   });
 });
 

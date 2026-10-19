@@ -1,6 +1,11 @@
 export interface Provider {
   id: string;
   name: string;
+  displayName?: string;
+  version?: string;
+  icon?: string;
+  region?: string;
+  author?: string;
   endpoints: string[];
   hasCatalog: boolean;
   hasPosts: boolean;

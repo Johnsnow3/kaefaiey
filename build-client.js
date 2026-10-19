@@ -144,6 +144,18 @@ async function build() {
       fs.writeFileSync(path.join(rootPublicDir, "index.html"), htmlContent);
       console.log("[Client Build] ✓ Mirrored bundle to root public/");
     }
+
+    // Mirror assets folder to public/assets
+    const assetsSrc = path.join(__dirname, "assets");
+    if (fs.existsSync(assetsSrc)) {
+      const webAssets = path.join(__dirname, "website", "public", "assets");
+      const rootAssets = path.join(__dirname, "public", "assets");
+      fs.mkdirSync(webAssets, { recursive: true });
+      fs.mkdirSync(rootAssets, { recursive: true });
+      fs.cpSync(assetsSrc, webAssets, { recursive: true });
+      fs.cpSync(assetsSrc, rootAssets, { recursive: true });
+      console.log("[Client Build] ✓ Mirrored assets folder to public/assets");
+    }
   } catch (err) {
     console.error("[Client Build] ✗ Build failed:", err);
     process.exit(1);

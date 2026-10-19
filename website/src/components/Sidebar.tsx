@@ -224,56 +224,35 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <div className="flex items-start justify-between gap-3">
                     {/* Provider Info */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors truncate">
-                          {p.name}
-                        </span>
-                        {isSelected && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-400/20 text-cyan-300 border border-cyan-400/30">
-                            ACTIVE
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <img
+                        src={p.icon || `/assets/${p.id}.png`}
+                        alt={p.displayName || p.name}
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = "none";
+                        }}
+                        className="w-11 h-11 rounded-xl object-cover shadow bg-zinc-900 border border-white/10 flex-shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors truncate">
+                            {p.displayName || p.name}
                           </span>
-                        )}
-                        {FEATURED_PROVIDERS.has(p.id) && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-400/15 text-amber-300 border border-amber-400/20 flex items-center gap-0.5">
-                            <Sparkles className="w-2.5 h-2.5" /> Top
+                          <span className="text-[10px] text-zinc-400 font-mono">
+                            {p.version || "v1.0"}
                           </span>
-                        )}
-                      </div>
+                          {isSelected && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-400/20 text-cyan-300 border border-cyan-400/30">
+                              ACTIVE
+                            </span>
+                          )}
+                        </div>
 
-                      {p.url && (
-                        <p className="text-[11px] text-gray-400 truncate mt-0.5 font-mono">
-                          {p.url.replace(/^https?:\/\//, "")}
-                        </p>
-                      )}
-
-                      {/* Capabilities chips */}
-                      <div className="flex flex-wrap items-center gap-1 mt-2">
-                        {p.hasCatalog && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-300">
-                            Catalog
-                          </span>
-                        )}
-                        {p.hasPosts && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300">
-                            Browse
-                          </span>
-                        )}
-                        {p.hasMeta && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
-                            Details
-                          </span>
-                        )}
-                        {p.hasStream && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300">
-                            Stream
-                          </span>
-                        )}
-                        {p.hasEpisodes && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300">
-                            Episodes
-                          </span>
-                        )}
+                        <div className="flex items-center gap-2 text-[10px] text-zinc-400 mt-0.5">
+                          <span>{p.region || "Global"}</span>
+                          <span>•</span>
+                          <span>{p.author || "John Snow"}</span>
+                        </div>
                       </div>
                     </div>
 

@@ -1,15 +1,14 @@
-import { getBaseUrl } from "../getBaseUrl";
 import { Info, Link, ProviderContext } from "../types";
 import { throwProviderError } from "../providerErrors";
 import {
   absoluteUrl,
   detailPath,
   encodeLink,
+  getProviderBaseUrl,
   MovieBoxDub,
   MovieBoxResource,
   MovieBoxSubject,
   parseNuxtDetail,
-  providerValue,
 } from "./utils";
 
 function buildPlaybackLink(
@@ -17,18 +16,46 @@ function buildPlaybackLink(
   dub: MovieBoxDub,
   seasons: MovieBoxResource["seasons"],
 ): string {
+  const isSeries = subject.subjectType === 2;
   const movieSeason =
     seasons?.find((season) => season.se === 0) || seasons?.[0];
+  const firstSeriesSeason =
+    seasons?.find((season) => (season.se || 0) > 0) || seasons?.[0];
   const movieResolution = movieSeason?.resolutions
     ?.filter((item) => (item.epNum || 0) >= 1)
     .sort((a, b) => (b.resolution || 0) - (a.resolution || 0))[0]?.resolution;
+  const targetSubjectId = dub.subjectId || subject.subjectId || "";
+  const targetDetailPath = dub.detailPath || subject.detailPath || "";
+
+  const alternateDub =
+    subject.dubs?.find(
+      (d) =>
+        d.subjectId &&
+        d.subjectId !== targetSubjectId &&
+        (d.original ||
+          d.lanName?.toLowerCase().includes("original") ||
+          d.lanCode === "en"),
+    ) ||
+    subject.dubs?.find((d) => d.subjectId && d.subjectId !== targetSubjectId);
+
+  const fallbackSubjectId =
+    subject.subjectId && subject.subjectId !== targetSubjectId
+      ? subject.subjectId
+      : alternateDub?.subjectId;
+  const fallbackDetailPath =
+    subject.detailPath && subject.detailPath !== targetDetailPath
+      ? subject.detailPath
+      : alternateDub?.detailPath;
+
   return encodeLink({
-    subjectId: dub.subjectId || subject.subjectId || "",
-    detailPath: dub.detailPath || subject.detailPath || "",
+    subjectId: targetSubjectId,
+    detailPath: targetDetailPath,
+    fallbackSubjectId,
+    fallbackDetailPath,
     language: dub.lanName || dub.lanCode || "Original",
-    season: subject.subjectType === 2 ? undefined : movieSeason?.se || 0,
-    episode: subject.subjectType === 2 ? undefined : 1,
-    resolution: subject.subjectType === 2 ? undefined : movieResolution,
+    season: isSeries ? (firstSeriesSeason?.se || 1) : (movieSeason?.se || 0),
+    episode: 1,
+    resolution: isSeries ? undefined : movieResolution,
     seasons,
   });
 }
@@ -41,7 +68,7 @@ export const getMeta = async function ({
   providerContext: ProviderContext;
 }): Promise<Info> {
   try {
-    const baseUrl = await getBaseUrl(providerValue);
+    const baseUrl = await getProviderBaseUrl();
     const pageUrl = absoluteUrl(baseUrl, `/moviesDetail/${detailPath(link)}`);
     const response = await fetch(pageUrl);
     if (!response.ok) {
