@@ -2,12 +2,15 @@ import { Info, ProviderContext } from "../types";
 
 const API_URL = "https://api.mxplayer.in/v1/web";
 const IMAGE_URL = "https://qqcdnpictest.mxplay.com/";
+const desktopParams =
+  "device-density=2&platform=com.mxplay.desktop&content-languages=hi,en,te,ta,kn,ml,mr,bn,gu,pa&kids-mode-enabled=false";
 
 const defaultHeaders = {
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
   Referer: "https://www.mxplayer.in/",
   Origin: "https://www.mxplayer.in",
+  Accept: "application/json, text/plain, */*",
 };
 
 function formatImageUrl(url?: string): string {
@@ -65,23 +68,19 @@ export const getMeta = async function ({
 }): Promise<Info> {
   const { axios } = providerContext;
 
-  const idMatch =
-    link.match(/\/detail\/(?:movie|tvshow|show|episode)\/([a-zA-Z0-9_-]+)/i) ||
-    link.match(/\/(?:movie|tvshow|show|episode)\/([a-zA-Z0-9_-]+)/i) ||
-    (link.length >= 24 && !link.includes("/") ? [, link] : null);
-
-  const id = idMatch ? idMatch[1] : null;
+  const hexMatch = link.match(/([a-f0-9]{32})/i);
+  const id = hexMatch ? hexMatch[1] : null;
   const isShow = link.includes("/tvshow/") || link.includes("/show/");
 
   // ==========================================
-  // STRATEGY 1: PURE API QUERY (NO GEO-BLOCK)
+  // STRATEGY 1: PURE API QUERY WITH DESKTOP PARAMS
   // ==========================================
   if (id) {
     if (isShow) {
       // ── TV SHOW VIA REST API ──
       try {
-        const seasonsUrl = `${API_URL}/detail/tab/tvshowseasons?type=tvshow&id=${id}&device-density=2&platform=com.mxplay.desktop&content-languages=hi,en`;
-        const res = await axios.get(seasonsUrl, { headers: defaultHeaders });
+        const seasonsUrl = `${API_URL}/detail/tab/tvshowseasons?type=tvshow&id=${id}&${desktopParams}`;
+        const res = await axios.get(seasonsUrl, { headers: defaultHeaders, timeout: 6000 });
         const data = res.data;
         const items = data.items || [];
         const container = items[0]?.container;
@@ -126,13 +125,13 @@ export const getMeta = async function ({
           };
         }
       } catch (err) {
-        console.warn("MX TVShow API meta failed, falling back:", err);
+        console.warn("MX TVShow API meta failed, trying fallback:", err);
       }
     } else {
       // ── MOVIE VIA REST API ──
       try {
-        const videoUrl = `${API_URL}/detail/video?id=${id}&type=movie`;
-        const res = await axios.get(videoUrl, { headers: defaultHeaders });
+        const videoUrl = `${API_URL}/detail/video?id=${id}&type=movie&${desktopParams}`;
+        const res = await axios.get(videoUrl, { headers: defaultHeaders, timeout: 6000 });
         const d = res.data;
 
         if (d && d.title && d.title.toLowerCase() !== "oops!" && d.title.toLowerCase() !== "oops!!!") {
@@ -169,7 +168,7 @@ export const getMeta = async function ({
           };
         }
       } catch (err) {
-        console.warn("MX Movie video API meta failed, falling back:", err);
+        console.warn("MX Movie video API meta failed, trying fallback:", err);
       }
     }
   }
@@ -179,12 +178,12 @@ export const getMeta = async function ({
   // ==========================================
   try {
     const pageUrl = link.startsWith("http") ? link : `https://www.mxplayer.in/detail/movie/${id}`;
-    const res = await axios.get(pageUrl, { headers: defaultHeaders });
+    const res = await axios.get(pageUrl, { headers: defaultHeaders, timeout: 6000 });
     const rawHtml = typeof res.data === "string" ? res.data : JSON.stringify(res.data);
     const parsedState = extractJson(rawHtml, "window.__mxs__");
 
     if (parsedState?.entities) {
-      const entity = (id && parsedState.entities[id]) || Object.values(parsedState.entities)[0] as any;
+      const entity = (id && parsedState.entities[id]) || (Object.values(parsedState.entities)[0] as any);
       if (entity && entity.title && entity.title.toLowerCase() !== "oops!" && entity.title.toLowerCase() !== "oops!!!") {
         let image = "";
         const bannerImg =
