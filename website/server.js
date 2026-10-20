@@ -951,10 +951,21 @@ app.all("/api/proxy/stream", async (req, res) => {
       if (!originReferer) originReferer = `${parsed.protocol}//${parsed.host}/`;
     } catch {}
 
+    // Special auto-referers for providers with strict CDN referer validation
+    if (
+      targetUrl.includes("hakunaymatata.com") ||
+      targetUrl.includes("aoneroom.com") ||
+      targetUrl.includes("officialmoviebox.com")
+    ) {
+      originReferer = "https://officialmoviebox.com/";
+    } else if (targetUrl.includes("mxplayer.in")) {
+      originReferer = "https://www.mxplayer.in/";
+    }
+
     const reqHeaders = {
       "User-Agent": defaultBrowserHeaders["User-Agent"],
       Referer: originReferer || targetUrl,
-      Origin: originReferer.replace(/\/+$/, "") || targetUrl,
+      Origin: originReferer ? originReferer.replace(/\/+$/, "") : targetUrl,
       Accept: "*/*",
       "Accept-Encoding": "identity",
     };
@@ -1006,20 +1017,6 @@ app.all("/api/proxy/stream", async (req, res) => {
       } catch (m3u8Err) {
         // Fall back to direct stream pipe below if text fetch fails
       }
-    }
-
-    // ─── HTTP/2 & Wangsu/Alibaba CDN Preferred Hosts (e.g. MovieBox) ───
-    const isHttp2Preferred =
-      targetUrl.includes("hakunaymatata.com") ||
-      targetUrl.includes("aoneroom.com") ||
-      targetUrl.includes("alibabacdn") ||
-      targetUrl.includes("alicdn");
-
-    if (isHttp2Preferred && !isM3u8Url) {
-      if (hasCurl) {
-        return proxyWithCurl(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
-      }
-      return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
     }
 
     // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS) ─────────────────

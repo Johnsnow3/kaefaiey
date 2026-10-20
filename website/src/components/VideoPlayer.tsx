@@ -80,6 +80,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const triedProxyRef = useRef(false);
+  const triedDirectRef = useRef(false);
 
   // Active Server Stream
   const [selectedStreamIndex, setSelectedStreamIndex] = useState(0);
@@ -184,6 +185,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setPlaybackNotice(null);
     setIsBuffering(true);
     triedProxyRef.current = false;
+    triedDirectRef.current = false;
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
@@ -330,6 +332,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         if (!triedProxyRef.current && !initialSrc.includes("/api/proxy/")) {
           triedProxyRef.current = true;
           video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
+          video.play().catch(() => {});
+        } else if (!triedDirectRef.current && initialSrc.includes("/api/proxy/")) {
+          triedDirectRef.current = true;
+          video.src = streamUrl;
           video.play().catch(() => {});
         } else {
           setPlaybackNotice(
