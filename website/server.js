@@ -971,6 +971,10 @@ app.all("/api/proxy/stream", async (req, res) => {
       originReferer = "https://www.youtube.com/";
     } else if (targetUrl.includes("net52.cc") || targetUrl.includes("makhi") || targetUrl.includes("freecdn") || targetUrl.includes("imgcdn.kim")) {
       originReferer = "https://net52.cc/home";
+    } else if (targetUrl.includes("gofile.io")) {
+      originReferer = "https://gofile.io/";
+    } else if (targetUrl.includes("vegadrive") || targetUrl.includes("one.vegadrive.app")) {
+      originReferer = "https://one.vegadrive.app/";
     }
 
     const reqHeaders = {

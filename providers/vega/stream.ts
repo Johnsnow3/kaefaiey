@@ -229,7 +229,35 @@ export async function getStream({
         console.log("dotlink error:", err?.message);
       }
     } else {
-      const hcStreams = await hubcloudExtractor(
+      try {
+        const hcStreams = await hubcloudExtractor(
+          link,
+          signal,
+          axios,
+          cheerio,
+          commonHeaders,
+          providerContext,
+          isDownload,
+          "vega",
+        );
+        if (Array.isArray(hcStreams)) {
+          for (const s of hcStreams) {
+            if (!streamLinks.some((existing) => existing.link === s.link)) {
+              streamLinks.push(s);
+            }
+          }
+        }
+      } catch (e: any) {
+        console.log("HubCloud stream error in vega:", e?.message);
+      }
+    }
+
+    if (streamLinks.length > 0) {
+      return streamLinks;
+    }
+
+    try {
+      const fallbackStreams = await hubcloudExtractor(
         link,
         signal,
         axios,
@@ -239,26 +267,16 @@ export async function getStream({
         isDownload,
         "vega",
       );
-      if (Array.isArray(hcStreams)) {
-        streamLinks.push(...hcStreams);
+      if (Array.isArray(fallbackStreams) && fallbackStreams.length > 0) {
+        return fallbackStreams;
       }
+    } catch (e: any) {
+      console.log("HubCloud final fallback error in vega:", e?.message);
     }
 
-    if (streamLinks.length > 0) {
-      return streamLinks;
-    }
-
-    return await hubcloudExtractor(
-      link,
-      signal,
-      axios,
-      cheerio,
-      commonHeaders,
-      providerContext,
-      isDownload,
-      "vega",
-    );
+    return streamLinks;
   } catch (error: any) {
-    throwProviderError("Vega", "stream", error);
+    console.warn("Vega getStream outer error:", error?.message);
+    return [];
   }
 }

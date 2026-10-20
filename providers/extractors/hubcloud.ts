@@ -85,48 +85,51 @@ export async function hubcloudExtractor(
   providerValue?: string,
 ) {
   try {
-    if (!headers["Cookie"]) {
-      headers["Cookie"] =
-        "ext_name=ojplmecpdpgccookcobabopnaifgidhf; xla=s4t; cf_clearance=woQrFGXtLfmEMBEiGUsVHrUBMT8s3cmguIzmMjmvpkg-1770053679-1.2.1.1-xBrQdciOJsweUF6F2T_OtH6jmyanN_TduQ0yslc_XqjU6RcHSxI7.YOKv6ry7oYo64868HYoULnVyww536H2eVI3R2e4wKzsky6abjPdfQPxqpUaXjxfJ02o6jl3_Vkwr4uiaU7Wy596Vdst3y78HXvVmKdIohhtPvp.vZ9_L7wvWdce0GRixjh_6JiqWmWMws46hwEt3hboaS1e1e4EoWCvj5b0M_jVwvSxBOAW5emFzvT3QrnRh4nyYmKDERnY";
-    }
+    const reqHeaders: Record<string, string> = { ...headers };
     console.log("hubcloudExtractor", link);
-    // console.log("headers", headers);
     const baseUrl = link.split("/").slice(0, 3).join("/");
     const streamLinks: any[] = [];
     const openWebView = providerContext?.openWebView;
 
     let vLinkRes: any;
     try {
-      vLinkRes = await axios(`${link}`, { headers, signal });
+      vLinkRes = await axios(`${link}`, { headers: reqHeaders, signal });
     } catch (error: any) {
       if (error.response?.status === 403) {
         if (openWebView) {
-          console.log(
-            `hubcloudExtractor: WAF detected (403) for ${link}, using solver...`,
-          );
-          const cleanHeaders = { ...headers, Referer: baseUrl };
+          try {
+            console.log(
+              `hubcloudExtractor: WAF detected (403) for ${link}, using solver...`,
+            );
+            const cleanHeaders = { ...reqHeaders, Referer: baseUrl };
 
-
-          const wafResult = await openWebView(baseUrl, {
-            title: "Solve the captcha below and click done",
-            description: "Required to bypass anti-bot protection.",
-            headers: cleanHeaders,
-            waitForCookie: "cf_clearance",
-            force: true,
-          });
-          if (wafResult.userAgent) headers["User-Agent"] = wafResult.userAgent;
-          headers["Cookie"] =
-            (headers["Cookie"] ? headers["Cookie"] + "; " : "") +
-            wafResult.cookies;
-          vLinkRes = await axios(`${link}`, { headers, signal });
+            const wafResult = await openWebView(baseUrl, {
+              title: "Solve the captcha below and click done",
+              description: "Required to bypass anti-bot protection.",
+              headers: cleanHeaders,
+              waitForCookie: "cf_clearance",
+              force: true,
+            });
+            if (wafResult?.userAgent) reqHeaders["User-Agent"] = wafResult.userAgent;
+            if (wafResult?.cookies) {
+              reqHeaders["Cookie"] =
+                (reqHeaders["Cookie"] ? reqHeaders["Cookie"] + "; " : "") +
+                wafResult.cookies;
+            }
+            vLinkRes = await axios(`${link}`, { headers: reqHeaders, signal });
+          } catch (solverErr: any) {
+            console.warn(`hubcloudExtractor: solver failed for ${link}:`, solverErr?.message);
+            return streamLinks;
+          }
         } else {
           console.log(
             `hubcloudExtractor: 403 Forbidden for ${link}, but openWebView solver is not available!`,
           );
-          throw error;
+          return streamLinks;
         }
       } else {
-        throw error;
+        console.warn(`hubcloudExtractor initial request error for ${link}:`, error?.message);
+        return streamLinks;
       }
     }
 
@@ -166,32 +169,37 @@ export async function hubcloudExtractor(
     let vcloudText = "";
     if (vcloudLink && !vcloudLink.includes("gofile.io") && vcloudLink !== link) {
       try {
-        const vcloudRes = await axios.get(vcloudLink, { headers, signal });
+        const vcloudRes = await axios.get(vcloudLink, { headers: reqHeaders, signal });
         vcloudText = vcloudRes.data;
       } catch (error: any) {
         if (error.response?.status === 403 && openWebView) {
-          console.log(
-            `hubcloudExtractor: WAF detected (403) for ${vcloudLink}, using solver...`,
-          );
-          const vcloudBaseUrl = vcloudLink.split("/").slice(0, 3).join("/");
-          const cleanHeaders2 = { ...headers, Referer: vcloudBaseUrl };
+          try {
+            console.log(
+              `hubcloudExtractor: WAF detected (403) for ${vcloudLink}, using solver...`,
+            );
+            const vcloudBaseUrl = vcloudLink.split("/").slice(0, 3).join("/");
+            const cleanHeaders2 = { ...reqHeaders, Referer: vcloudBaseUrl };
 
-
-          const wafResult = await openWebView(vcloudBaseUrl, {
-            title: "Solve the captcha below and click done",
-            description: "Required to bypass anti-bot protection.",
-            headers: cleanHeaders2,
-            waitForCookie: "cf_clearance",
-            force: true,
-          });
-          if (wafResult.userAgent) headers["User-Agent"] = wafResult.userAgent;
-          headers["Cookie"] =
-            (headers["Cookie"] ? headers["Cookie"] + "; " : "") +
-            wafResult.cookies;
-          const retryRes = await axios.get(vcloudLink, { headers, signal });
-          vcloudText = retryRes.data;
+            const wafResult = await openWebView(vcloudBaseUrl, {
+              title: "Solve the captcha below and click done",
+              description: "Required to bypass anti-bot protection.",
+              headers: cleanHeaders2,
+              waitForCookie: "cf_clearance",
+              force: true,
+            });
+            if (wafResult?.userAgent) reqHeaders["User-Agent"] = wafResult.userAgent;
+            if (wafResult?.cookies) {
+              reqHeaders["Cookie"] =
+                (reqHeaders["Cookie"] ? reqHeaders["Cookie"] + "; " : "") +
+                wafResult.cookies;
+            }
+            const retryRes = await axios.get(vcloudLink, { headers: reqHeaders, signal });
+            vcloudText = retryRes.data;
+          } catch (solverErr: any) {
+            console.warn(`hubcloudExtractor: solver failed for ${vcloudLink}:`, solverErr?.message);
+          }
         } else {
-          throw error;
+          console.warn(`hubcloudExtractor error fetching ${vcloudLink}:`, error?.message);
         }
       }
     }
@@ -383,6 +391,7 @@ export async function hubcloudExtractor(
     console.log("streamLinks", streamLinks);
     return streamLinks;
   } catch (error: any) {
-    throwProviderError("HubCloud", `extract ${link}`, error);
+    console.warn(`HubCloud extract error for ${link}:`, error?.message || error);
+    return streamLinks;
   }
 }
