@@ -1164,6 +1164,17 @@ export const netMirrorGetStream = async ({
         plData.tracks.forEach((track: any) => {
           let uri = track.file || "";
           if (!uri) return;
+
+          // Filter out scrubber preview thumbnail sprite tracks (which are images, not subtitles)
+          if (
+            track.kind === "thumbnails" ||
+            uri.includes("back0") ||
+            uri.includes("t001.jpg") ||
+            (uri.includes("/vtt/") && track.kind !== "captions" && track.kind !== "subtitles")
+          ) {
+            return;
+          }
+
           if (!uri.startsWith("http")) {
             if (uri.startsWith("//")) {
               uri = "https:" + uri;
@@ -1178,7 +1189,7 @@ export const netMirrorGetStream = async ({
 
           const isVtt = uri.toLowerCase().includes(".vtt");
           subtitles.push({
-            title: track.label || "Subtitle",
+            title: track.label || "English",
             language: track.label || "English",
             type: isVtt ? "text/vtt" : "application/x-subrip",
             uri,

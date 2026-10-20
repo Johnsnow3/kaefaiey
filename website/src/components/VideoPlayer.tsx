@@ -52,6 +52,64 @@ const SubtitlesIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   </svg>
 );
 
+interface ParsedCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function parseVttTime(timeStr: string): number {
+  try {
+    const clean = timeStr.trim();
+    const parts = clean.split(":");
+    if (parts.length === 3) {
+      const [h, m, rest] = parts;
+      const [s, ms] = rest.split(".");
+      return (
+        parseInt(h, 10) * 3600 +
+        parseInt(m, 10) * 60 +
+        parseInt(s, 10) +
+        parseInt((ms || "0").slice(0, 3), 10) / 1000
+      );
+    } else if (parts.length === 2) {
+      const [m, rest] = parts;
+      const [s, ms] = rest.split(".");
+      return (
+        parseInt(m, 10) * 60 +
+        parseInt(s, 10) +
+        parseInt((ms || "0").slice(0, 3), 10) / 1000
+      );
+    }
+  } catch {}
+  return 0;
+}
+
+function parseVttText(vtt: string): ParsedCue[] {
+  const cues: ParsedCue[] = [];
+  const lines = vtt.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    if (line.includes("-->")) {
+      const [startStr, endStr] = line.split("-->").map((s) => s.trim().split(" ")[0]);
+      const start = parseVttTime(startStr);
+      const end = parseVttTime(endStr);
+      const textLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i].trim() !== "") {
+        textLines.push(lines[i].trim().replace(/<[^>]+>/g, ""));
+        i++;
+      }
+      if (textLines.length > 0 && end > start) {
+        cues.push({ start, end, text: textLines.join("\n") });
+      }
+    } else {
+      i++;
+    }
+  }
+  return cues;
+}
+
 interface VideoPlayerProps {
   title: string;
   subtitle?: string;
@@ -108,6 +166,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const [availableSubtitles, setAvailableSubtitles] = useState<(SubtitleTrack & { hlsTrackId?: number })[]>([]);
   const [selectedSubtitleIndex, setSelectedSubtitleIndex] = useState<number>(-1);
+  const [activeCues, setActiveCues] = useState<ParsedCue[]>([]);
 
   // Quality levels from HLS
   const [qualityLevels, setQualityLevels] = useState<{ id: number; height: number; bitrate?: number; label: string }[]>([]);
@@ -160,12 +219,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, []);
 
-  // Aggregate external subtitles and initial subtitles
+  // Aggregate external subtitles and initial subtitles (strictly filtering preview thumbnail sprites)
   useEffect(() => {
-    const combined: (SubtitleTrack & { hlsTrackId?: number })[] = [...initialSubtitles];
+    const isRealSub = (s: SubtitleTrack) => {
+      const u = (s.uri || "").toLowerCase();
+      const t = (s.title || "").toLowerCase();
+      if (u.includes("back0") || u.includes("t001.jpg") || u.includes(".jpg") || t.includes("thumbnail")) {
+        return false;
+      }
+      return true;
+    };
+
+    const combined: (SubtitleTrack & { hlsTrackId?: number })[] = [
+      ...initialSubtitles.filter(isRealSub),
+    ];
     if (activeStream?.subtitles) {
       for (const s of activeStream.subtitles) {
-        if (!combined.some((x) => x.uri === s.uri)) {
+        if (isRealSub(s) && !combined.some((x) => x.uri === s.uri)) {
           combined.push(s);
         }
       }
@@ -173,14 +243,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setAvailableSubtitles(combined);
   }, [activeStream, initialSubtitles]);
 
+  // Load and parse cues whenever selectedSubtitleIndex changes
+  useEffect(() => {
+    if (selectedSubtitleIndex === -1) {
+      setActiveCues([]);
+      return;
+    }
+
+    const currentSub = availableSubtitles[selectedSubtitleIndex];
+    if (!currentSub || !currentSub.uri) {
+      setActiveCues([]);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchSubtitles = async () => {
+      try {
+        const subProxyUrl = getProxySubtitleUrl(
+          currentSub.uri,
+          activeStream?.headers?.Referer
+        );
+        const res = await fetch(subProxyUrl);
+        if (res.ok) {
+          const text = await res.text();
+          if (isMounted) {
+            const parsed = parseVttText(text);
+            setActiveCues(parsed);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch external subtitles:", err);
+      }
+    };
+
+    fetchSubtitles();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedSubtitleIndex, availableSubtitles, activeStream?.headers?.Referer]);
+
   // Load Video Source via HLS.js or Native MP4 / Range Proxy
   useEffect(() => {
     if (!videoRef.current || !activeStream?.link) return;
     const video = videoRef.current;
     const streamUrl = activeStream.link;
-    const isM3u8 = streamUrl.includes(".m3u8") || activeStream.type === "m3u8" || streamUrl.includes("/hls/");
-    const isMkv = streamUrl.toLowerCase().includes(".mkv") || activeStream.type === "mkv";
+    const lowerUrl = streamUrl.toLowerCase();
+    const isM3u8 = streamUrl.includes(".m3u8") || activeStream.type === "m3u8" || streamUrl.includes("/hls/") || lowerUrl.includes("hls_variant");
+    const isMkv = lowerUrl.includes(".mkv") || activeStream.type === "mkv";
     const hasCustomReferer = Boolean(activeStream.headers?.Referer);
+
+    const needsProxy =
+      hasCustomReferer ||
+      Boolean(activeStream.headers?.Cookie) ||
+      isMkv ||
+      lowerUrl.includes("googlevideo.com") ||
+      lowerUrl.includes("youtube.com") ||
+      lowerUrl.includes("mxplayer.in") ||
+      lowerUrl.includes("cloudfront.net") ||
+      lowerUrl.includes("hakunaymatata.com") ||
+      lowerUrl.includes("officialmoviebox.com") ||
+      lowerUrl.includes("net52.cc") ||
+      lowerUrl.includes("makhi") ||
+      lowerUrl.includes("freecdn") ||
+      lowerUrl.includes("imgcdn.kim");
 
     setPlaybackNotice(null);
     setIsBuffering(true);
@@ -192,17 +317,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hlsRef.current = null;
     }
 
+    const parseLangName = (lang: string, name: string) => {
+      const l = (lang || "").toLowerCase();
+      const n = name || "";
+      if (n && !n.startsWith("stream_")) return n;
+      if (l.startsWith("hi")) return "Hindi";
+      if (l.startsWith("en")) return "English";
+      if (l.startsWith("te")) return "Telugu";
+      if (l.startsWith("ta")) return "Tamil";
+      if (l.startsWith("kn") || l.startsWith("kan")) return "Kannada";
+      if (l.startsWith("ml") || l.startsWith("mal")) return "Malayalam";
+      if (l.startsWith("bn")) return "Bengali";
+      if (l.startsWith("mr")) return "Marathi";
+      if (l.startsWith("pa")) return "Punjabi";
+      if (l.startsWith("ja")) return "Japanese";
+      if (l.startsWith("es")) return "Spanish";
+      if (l.startsWith("de")) return "German";
+      return n || lang || "Audio";
+    };
+
     if (isM3u8 && Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
-        backBufferLength: 90,
-        maxBufferLength: 30,
-        maxMaxBufferLength: 600,
+        backBufferLength: 60,
+        maxBufferLength: 60,
+        maxMaxBufferLength: 120,
       });
 
-      const initialHlsUrl = hasCustomReferer
-        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer)
+      const initialHlsUrl = needsProxy
+        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer, activeStream.headers?.Cookie)
         : streamUrl;
 
       hls.loadSource(initialHlsUrl);
@@ -227,10 +371,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         // Initial Audio tracks from manifest
         if (hls.audioTracks && hls.audioTracks.length > 0) {
           const tracks = hls.audioTracks.map((t, index) => {
-            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 2).toLowerCase()) || "hi";
+            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 3).toLowerCase()) || "hi";
             return {
               id: index,
-              name: t.name || `Audio Track ${index + 1}`,
+              name: parseLangName(langCode, t.name),
               lang: langCode,
               codec: "audio/mp4a-latm",
             };
@@ -244,10 +388,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, (_, data) => {
         if (data.audioTracks && data.audioTracks.length > 0) {
           const tracks = data.audioTracks.map((t, index) => {
-            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 2).toLowerCase()) || "hi";
+            const langCode = t.lang || (t.name?.length === 2 ? t.name.toLowerCase() : t.name?.slice(0, 3).toLowerCase()) || "hi";
             return {
               id: index,
-              name: t.name || `Audio Track ${index + 1}`,
+              name: parseLangName(langCode, t.name),
               lang: langCode,
               codec: "audio/mp4a-latm",
             };
@@ -292,7 +436,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             case Hls.ErrorTypes.NETWORK_ERROR:
               if (!triedProxyRef.current && !streamUrl.includes("/api/proxy/")) {
                 triedProxyRef.current = true;
-                const proxied = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
+                const proxied = getProxyStreamUrl(
+                  streamUrl,
+                  activeStream.headers?.Referer,
+                  activeStream.headers?.Cookie
+                );
                 hls.loadSource(proxied);
                 hls.startLoad();
               } else {
@@ -305,12 +453,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             default:
               if (!triedProxyRef.current && !streamUrl.includes("/api/proxy/")) {
                 triedProxyRef.current = true;
-                const proxied = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
+                const proxied = getProxyStreamUrl(
+                  streamUrl,
+                  activeStream.headers?.Referer,
+                  activeStream.headers?.Cookie
+                );
                 hls.loadSource(proxied);
                 hls.startLoad();
               } else {
                 setPlaybackNotice(
-                  "Unable to decode stream directly in browser. Try opening in VLC, MX Player, or choosing another server."
+                  "Unable to decode stream directly in browser. Try opening with 1-click in VLC, MX Player, or choosing another server."
                 );
                 hls.destroy();
               }
@@ -322,8 +474,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       hlsRef.current = hls;
     } else {
       // Direct MP4 / MKV stream
-      const initialSrc = hasCustomReferer || isMkv
-        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer)
+      const initialSrc = needsProxy
+        ? getProxyStreamUrl(streamUrl, activeStream.headers?.Referer, activeStream.headers?.Cookie)
         : streamUrl;
 
       video.src = initialSrc;
@@ -331,7 +483,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         console.warn("Video playback error event:", video.error?.code, video.error?.message, "src:", initialSrc);
         if (!triedProxyRef.current && !initialSrc.includes("/api/proxy/")) {
           triedProxyRef.current = true;
-          video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
+          video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer, activeStream.headers?.Cookie);
           video.play().catch(() => {});
         } else if (!triedDirectRef.current && initialSrc.includes("/api/proxy/")) {
           triedDirectRef.current = true;
@@ -519,11 +671,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Display audio tracks (matching Image 4)
   const displayAudioTracks = audioTracks.length > 0 ? audioTracks : [
-    { id: 0, name: "1. Hindi", lang: "hi", codec: "audio/mp4a-latm" },
-    { id: 1, name: "2. Kannada", lang: "kn", codec: "audio/mp4a-latm" },
-    { id: 2, name: "3. Malayalam", lang: "ml", codec: "audio/mp4a-latm" },
-    { id: 3, name: "4. Tamil", lang: "ta", codec: "audio/mp4a-latm" },
+    { id: 0, name: "Default Audio", lang: "hi", codec: "audio/mp4a-latm" },
   ];
+
+  // Active cue text for floating subtitles (bulletproof rendering on mobile landscape and portrait)
+  const activeCueText = selectedSubtitleIndex >= 0
+    ? activeCues.find((c) => currentTime >= c.start && currentTime <= c.end)?.text || null
+    : null;
 
   // Active audio label for bottom bar (e.g. "Hi")
   const activeAudioDisplay = displayAudioTracks.find((t) => t.id === selectedAudioTrack)?.lang?.toUpperCase() || "HI";
@@ -589,6 +743,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           />
         ))}
       </video>
+
+      {/* Floating Subtitle Overlay (Guarantees visible subtitles across all mobile orientations) */}
+      {activeCueText && (
+        <div className="absolute bottom-20 sm:bottom-24 inset-x-4 flex justify-center pointer-events-none z-20 animate-fadeIn">
+          <div className="bg-black/85 backdrop-blur-sm border border-white/10 px-4 py-1.5 rounded-xl text-center max-w-xl shadow-2xl">
+            <span className="text-white text-sm sm:text-lg font-semibold tracking-wide drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] whitespace-pre-line leading-snug">
+              {activeCueText}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Buffering Animation Overlay (Center) */}
       {isBuffering && !playbackNotice && (

@@ -195,13 +195,24 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
     setDownloadingEpLink(ep.link);
     try {
       const mediaType = isSeries ? "series" : "movie";
-      const streams = await fetchStream(provider, ep.link, mediaType);
+      const streams = await fetchStream(provider, ep.link, mediaType, true);
       if (!streams || streams.length === 0) {
         throw new Error("No download stream available for this episode.");
       }
-      const streamUrl = streams[0].link;
-      const safeTitle = `${meta?.title || item.title} - ${ep.title || "Episode"}.mp4`.replace(/[\\/:*?"<>|]/g, "_");
-      const downloadProxyUrl = `${getProxyStreamUrl(streamUrl, streams[0].headers?.Referer)}&download=1&filename=${encodeURIComponent(safeTitle)}`;
+      // Prioritize standalone MP4 stream for direct downloads if available
+      const downloadStream = streams.find((s) => s.type === "mp4") || streams[0];
+      const streamUrl = downloadStream.link;
+      const extension = downloadStream.type === "mkv" ? "mkv" : downloadStream.type === "mp4" ? "mp4" : "m3u8";
+      const safeTitle = `${meta?.title || item.title} - ${ep.title || "Episode"}.${extension}`.replace(/[\\/:*?"<>|]/g, "_");
+      
+      const downloadProxyUrl = getProxyStreamUrl(
+        streamUrl,
+        downloadStream.headers?.Referer,
+        downloadStream.headers?.Cookie,
+        true,
+        safeTitle
+      );
+      
       const a = document.createElement("a");
       a.href = downloadProxyUrl;
       a.download = safeTitle;
@@ -210,7 +221,7 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
       a.click();
       document.body.removeChild(a);
     } catch (err: any) {
-      alert(`Download failed: ${err.message || "Unable to extract stream"}`);
+      alert(`Download notice: ${err.message || "Unable to extract download stream"}`);
     } finally {
       setDownloadingEpLink(null);
     }
@@ -258,7 +269,7 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
         {/* Content Body */}
         <div className="px-5 sm:px-6 -mt-8 relative z-10 space-y-4 flex-1">
           {/* Title */}
-          <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight leading-tight">
+          <h1 className="text-2xl sm:text-3xl md:text-4xl font-extrabold text-white tracking-tight leading-tight break-words">
             {meta?.title || item.title}
           </h1>
 

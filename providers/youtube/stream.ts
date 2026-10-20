@@ -169,6 +169,10 @@ async function fetchFromInnerTube(
         type: "m3u8",
         quality: "1080",
         tag: "Audio + Video",
+        headers: {
+          Referer: "https://www.youtube.com/",
+          Origin: "https://www.youtube.com",
+        },
       });
     }
 
@@ -183,6 +187,10 @@ async function fetchFromInnerTube(
           type: "mp4",
           quality: qualityLabel.replace("p", ""),
           tag: "Audio + Video",
+          headers: {
+            Referer: "https://www.youtube.com/",
+            Origin: "https://www.youtube.com",
+          },
         });
       }
     }

@@ -158,12 +158,13 @@ export async function fetchEpisodes(
 export async function fetchStream(
   providerId: string,
   streamLink: string,
-  type: "movie" | "series" = "movie"
+  type: "movie" | "series" = "movie",
+  isDownload: boolean = false
 ): Promise<MediaStream[]> {
   try {
     const url = `${API_BASE}/api/${providerId}/stream?link=${encodeURIComponent(
       streamLink
-    )}&type=${type}`;
+    )}&type=${type}${isDownload ? "&download=true" : ""}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -176,10 +177,19 @@ export async function fetchStream(
 
 // ─── External Players & Download Managers Helpers ───────────────────────────
 
-export function getProxyStreamUrl(streamUrl: string, referer?: string): string {
+export function getProxyStreamUrl(
+  streamUrl: string,
+  referer?: string,
+  cookie?: string,
+  isDownload?: boolean,
+  filename?: string
+): string {
   const params = new URLSearchParams();
   params.set("url", streamUrl);
   if (referer) params.set("referer", referer);
+  if (cookie) params.set("cookie", cookie);
+  if (isDownload) params.set("download", "1");
+  if (filename) params.set("filename", filename);
   return `${window.location.origin}/api/proxy/stream?${params.toString()}`;
 }
 

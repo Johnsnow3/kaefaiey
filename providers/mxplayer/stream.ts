@@ -43,6 +43,7 @@ export const getStream = async function ({
         type: streamType,
         headers: {
           Referer: "https://www.mxplayer.in/",
+          Origin: "https://www.mxplayer.in",
         },
       });
     }

@@ -727,6 +727,13 @@ app.options("/api/proxy/stream", (req, res) => {
   res.sendStatus(204);
 });
 
+app.options("/api/proxy/subtitle", (req, res) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "*");
+  res.sendStatus(204);
+});
+
 function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
   const originReferer = reqHeaders["Referer"] || targetUrl;
   const args = [
@@ -935,7 +942,7 @@ app.all("/api/proxy/stream", async (req, res) => {
     return res.sendStatus(204);
   }
 
-  const { url, referer } = req.query;
+  const { url, referer, cookie } = req.query;
   if (!url) {
     return res.status(400).json({ error: "Query parameter 'url' is required." });
   }
@@ -958,8 +965,12 @@ app.all("/api/proxy/stream", async (req, res) => {
       targetUrl.includes("officialmoviebox.com")
     ) {
       originReferer = "https://officialmoviebox.com/";
-    } else if (targetUrl.includes("mxplayer.in")) {
+    } else if (targetUrl.includes("mxplayer.in") || targetUrl.includes("cloudfront.net/video/")) {
       originReferer = "https://www.mxplayer.in/";
+    } else if (targetUrl.includes("googlevideo.com") || targetUrl.includes("youtube.com")) {
+      originReferer = "https://www.youtube.com/";
+    } else if (targetUrl.includes("net52.cc") || targetUrl.includes("makhi") || targetUrl.includes("freecdn") || targetUrl.includes("imgcdn.kim")) {
+      originReferer = "https://net52.cc/home";
     }
 
     const reqHeaders = {
@@ -970,12 +981,23 @@ app.all("/api/proxy/stream", async (req, res) => {
       "Accept-Encoding": "identity",
     };
 
+    if (cookie) {
+      reqHeaders["Cookie"] = String(cookie);
+    } else if (targetUrl.includes("net52.cc") || targetUrl.includes("makhi") || targetUrl.includes("freecdn")) {
+      try {
+        const cachedToken = (await kvStore.get("t_hash_t")) || (await kvStore.get("t_hash_t_data"))?.token;
+        if (cachedToken) {
+          reqHeaders["Cookie"] = `t_hash_t=${cachedToken}; hd=on; ott=nf`;
+        }
+      } catch {}
+    }
+
     if (req.headers.range) {
       reqHeaders["Range"] = req.headers.range;
     }
 
     // ─── M3U8 HLS Master/Media Playlist Proxy & Rewriter ───────────────────
-    const isM3u8Url = targetUrl.toLowerCase().includes(".m3u8") || targetUrl.toLowerCase().includes("/m3u8");
+    const isM3u8Url = targetUrl.toLowerCase().includes(".m3u8") || targetUrl.toLowerCase().includes("/m3u8") || targetUrl.toLowerCase().includes("hls_variant");
     if (isM3u8Url && req.method !== "HEAD") {
       try {
         const m3u8Res = await axios({
@@ -989,9 +1011,13 @@ app.all("/api/proxy/stream", async (req, res) => {
 
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "*");
         res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
 
+        const cookieParam = cookie ? `&cookie=${encodeURIComponent(cookie)}` : "";
         const lines = String(m3u8Res.data).split("\n");
+        let hasDefaultAudio = false;
+
         const rewritten = lines.map((line) => {
           const trimmed = line.trim();
           if (!trimmed) return line;
@@ -999,10 +1025,19 @@ app.all("/api/proxy/stream", async (req, res) => {
           if (trimmed.startsWith("#")) {
             // Rewrite URI in tags e.g. #EXT-X-MEDIA:TYPE=AUDIO,...URI="..." or #EXT-X-MEDIA:TYPE=SUBTITLES,...URI="..." or #EXT-X-KEY:...URI="..." or #EXT-X-MAP:...URI="..."
             if (trimmed.includes('URI="')) {
-              return trimmed.replace(/URI="([^"]+)"/g, (_, rawUri) => {
+              let tagLine = trimmed;
+              // If this is an audio track and none has been marked default yet, enable default/autoselect on the first audio track
+              if (tagLine.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
+                if (!hasDefaultAudio && (tagLine.includes("DEFAULT=NO") || !tagLine.includes("DEFAULT="))) {
+                  hasDefaultAudio = true;
+                  tagLine = tagLine.replace(/DEFAULT=NO/g, "DEFAULT=YES").replace(/AUTOSELECT=NO/g, "AUTOSELECT=YES");
+                }
+              }
+
+              return tagLine.replace(/URI="([^"]+)"/g, (_, rawUri) => {
                 let absUri = rawUri;
                 try { absUri = new URL(rawUri, targetUrl).href; } catch {}
-                return `URI="/api/proxy/stream?url=${encodeURIComponent(absUri)}&referer=${encodeURIComponent(originReferer)}"`;
+                return `URI="/api/proxy/stream?url=${encodeURIComponent(absUri)}&referer=${encodeURIComponent(originReferer)}${cookieParam}"`;
               });
             }
             return line;
@@ -1010,7 +1045,7 @@ app.all("/api/proxy/stream", async (req, res) => {
 
           let absSeg = trimmed;
           try { absSeg = new URL(trimmed, targetUrl).href; } catch {}
-          return `/api/proxy/stream?url=${encodeURIComponent(absSeg)}&referer=${encodeURIComponent(originReferer)}`;
+          return `/api/proxy/stream?url=${encodeURIComponent(absSeg)}&referer=${encodeURIComponent(originReferer)}${cookieParam}`;
         });
 
         return res.send(rewritten.join("\n"));
@@ -1019,7 +1054,7 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     }
 
-    // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS) ─────────────────
+    // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS / M4S / WOFF2) ─────
     let streamRes;
     try {
       streamRes = await axios({
@@ -1045,6 +1080,7 @@ app.all("/api/proxy/stream", async (req, res) => {
     res.status(streamRes.status);
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
 
     const forwardHeaders = [
@@ -1066,14 +1102,29 @@ app.all("/api/proxy/stream", async (req, res) => {
       res.setHeader("Content-Disposition", "inline");
     }
 
-    // Ensure browser recognises video if upstream sent octet-stream
+    // ─── Correct Obfuscated MIME Types (NetMirror TS chunks disguised as .woff2 / .js; MX Player .m4s / .mp4; MKV)
+    const lowerUrl = targetUrl.toLowerCase();
     const currType = (streamRes.headers["content-type"] || "").toLowerCase();
-    if (!currType || currType.includes("octet-stream")) {
-      if (targetUrl.toLowerCase().includes(".mkv")) {
-        res.setHeader("Content-Type", "video/mp4");
-      } else if (targetUrl.toLowerCase().includes(".mp4")) {
-        res.setHeader("Content-Type", "video/mp4");
-      }
+
+    if (
+      lowerUrl.includes(".woff2") ||
+      lowerUrl.includes(".woff") ||
+      lowerUrl.includes(".ts") ||
+      currType.includes("font/woff") ||
+      (lowerUrl.includes(".js") && (lowerUrl.includes("/files/") || lowerUrl.includes("/a/") || lowerUrl.includes("makhi") || lowerUrl.includes("freecdn")))
+    ) {
+      // NetMirror MPEG-TS chunk disguised as woff2 font or js script
+      res.setHeader("Content-Type", "video/mp2t");
+    } else if (
+      lowerUrl.includes(".m4s") ||
+      lowerUrl.includes(".mp4") ||
+      lowerUrl.includes(".m4v") ||
+      lowerUrl.includes(".mkv") ||
+      currType.includes("octet-stream") ||
+      currType.includes("text/html")
+    ) {
+      // MP4, fragmented MP4, or Matroska container
+      res.setHeader("Content-Type", "video/mp4");
     }
 
     if (!streamRes.headers["accept-ranges"]) {
@@ -1118,7 +1169,7 @@ app.get("/api/proxy/subtitle", async (req, res) => {
       Accept: "*/*",
     };
 
-    if (String(targetUrl).includes("userver") || String(originReferer).includes("netmirror")) {
+    if (String(targetUrl).includes("userver") || String(originReferer).includes("netmirror") || String(targetUrl).includes("subscdn")) {
       try {
         const cachedToken = (await kvStore.get("t_hash_t")) || (await kvStore.get("t_hash_t_data"))?.token;
         if (cachedToken) {
@@ -1134,8 +1185,12 @@ app.get("/api/proxy/subtitle", async (req, res) => {
     });
 
     let content = String(subRes.data || "");
+    // Clean UTF-8 BOM and normalize line endings
+    content = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/^\uFEFF/, "");
+
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
     res.setHeader("Content-Type", "text/vtt; charset=utf-8");
 
     // If already starts with WEBVTT
@@ -1143,8 +1198,7 @@ app.get("/api/proxy/subtitle", async (req, res) => {
       return res.send(content);
     }
 
-    // Convert SRT to WebVTT
-    // Replace comma with dot in timestamps (00:01:23,456 --> 00:01:23.456)
+    // Convert SRT to WebVTT: replace comma with dot in timestamps (00:01:23,456 --> 00:01:23.456)
     const vttContent = "WEBVTT\n\n" + content.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
     return res.send(vttContent);
   } catch (err) {
