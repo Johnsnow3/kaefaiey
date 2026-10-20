@@ -417,6 +417,38 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get("/api/debug-proxy", async (req, res) => {
+  const targetUrl = req.query.url || "https://bcdnxw.hakunaymatata.com/resource/7f5e548580cb9377d874406794a006d8.mp4?sign=cb247797b53a651cbd8e1b021ed1231a&t=1792492637";
+  const results = {
+    hasCurl,
+    nodeVersion: process.version,
+    curlVersion: "",
+    curlVerbose: "",
+    outboundIp: "",
+  };
+
+  try {
+    results.curlVersion = execSync("curl --version").toString().split("\n")[0];
+  } catch (e) {
+    results.curlVersion = "Error: " + e.message;
+  }
+
+  try {
+    results.outboundIp = execSync("curl -s https://api.ipify.org").toString();
+  } catch (e) {
+    results.outboundIp = "Error: " + e.message;
+  }
+
+  try {
+    const cmd = `curl -s -v --http2 -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" -H "Referer: https://officialmoviebox.com/" -H "Origin: https://officialmoviebox.com" -r 0-10 "${targetUrl}" 2>&1`;
+    results.curlVerbose = execSync(cmd, { timeout: 8000 }).toString("utf8").substring(0, 2000);
+  } catch (e) {
+    results.curlVerbose = "Error: " + e.message + (e.stdout ? "\n" + e.stdout.toString() : "");
+  }
+
+  res.json(results);
+});
+
 // ─── Providers Metadata Endpoints ────────────────────────────────────────────
 app.get("/api/providers", (req, res) => {
   const enabledManifest = manifest.filter((m) => !m.disabled);
