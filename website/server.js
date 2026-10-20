@@ -6,6 +6,14 @@ const os = require("os");
 const axios = require("axios");
 const cheerio = require("cheerio");
 const http2 = require("http2");
+const { spawn, execSync } = require("child_process");
+
+// Check if curl command is available on system
+let hasCurl = false;
+try {
+  execSync("curl --version", { stdio: "ignore" });
+  hasCurl = true;
+} catch {}
 
 // ─── Log Rate Limiter (Protects against Railway 500 logs/sec limit) ─────────
 const origLog = console.log;
@@ -687,12 +695,119 @@ app.options("/api/proxy/stream", (req, res) => {
   res.sendStatus(204);
 });
 
-function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, res) {
+function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
+  const originReferer = reqHeaders["Referer"] || targetUrl;
+  const args = [
+    "-s",
+    "-i",
+    "--no-buffer",
+    "--http2",
+    "-H", `User-Agent: ${reqHeaders["User-Agent"] || defaultBrowserHeaders["User-Agent"]}`,
+    "-H", `Referer: ${originReferer}`,
+    "-H", `Origin: ${originReferer.replace(/\/+$/, "")}`,
+    "-H", "Accept: */*",
+    "-L",
+    "--max-redirs", "5",
+  ];
+
+  if (method === "HEAD") {
+    args.push("--head");
+  } else if (req.headers && req.headers.range) {
+    args.push("-r", req.headers.range.replace(/^bytes=/, ""));
+  }
+
+  args.push(targetUrl);
+
+  const child = spawn("curl", args);
+  let headerBuffer = Buffer.alloc(0);
+  let headersParsed = false;
+
+  child.stdout.on("data", (chunk) => {
+    if (!headersParsed) {
+      headerBuffer = Buffer.concat([headerBuffer, chunk]);
+      const headerEnd = headerBuffer.indexOf("\r\n\r\n");
+      if (headerEnd !== -1) {
+        headersParsed = true;
+        const headerText = headerBuffer.subarray(0, headerEnd).toString("utf8");
+        const bodyRemainder = headerBuffer.subarray(headerEnd + 4);
+
+        const lines = headerText.split("\r\n");
+        let status = 200;
+        const headers = {};
+
+        for (const line of lines) {
+          const statusMatch = line.match(/^HTTP\/\S+\s+(\d+)/);
+          if (statusMatch) {
+            status = parseInt(statusMatch[1], 10);
+            continue;
+          }
+          const colon = line.indexOf(":");
+          if (colon !== -1) {
+            const k = line.substring(0, colon).trim().toLowerCase();
+            const v = line.substring(colon + 1).trim();
+            headers[k] = v;
+          }
+        }
+
+        res.status(status);
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+
+        ["content-type", "content-length", "content-range", "accept-ranges"].forEach((h) => {
+          if (headers[h]) res.setHeader(h, headers[h]);
+        });
+
+        if (isDownload) {
+          res.setHeader("Content-Disposition", `attachment; filename="${String(filename || "video.mp4").replace(/"/g, "")}"`);
+        } else {
+          res.setHeader("Content-Disposition", "inline");
+        }
+
+        const currType = (headers["content-type"] || "").toLowerCase();
+        if (!currType || currType.includes("octet-stream") || currType.includes("text/html")) {
+          res.setHeader("Content-Type", "video/mp4");
+        }
+
+        if (!headers["accept-ranges"]) {
+          res.setHeader("Accept-Ranges", "bytes");
+        }
+
+        if (method === "HEAD") {
+          try { child.kill("SIGKILL"); } catch {}
+          return res.end();
+        }
+
+        if (bodyRemainder.length > 0) {
+          res.write(bodyRemainder);
+        }
+        child.stdout.pipe(res);
+      }
+    }
+  });
+
+  child.on("error", (err) => {
+    if (!res.headersSent && !res.writableEnded) {
+      res.status(502).json({ error: `Curl stream proxy failed: ${err.message}` });
+    }
+  });
+
+  req.on("close", () => {
+    try { child.kill("SIGKILL"); } catch {}
+  });
+}
+
+function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
   try {
     const parsed = new URL(targetUrl);
-    const client = http2.connect(`${parsed.protocol}//${parsed.host}`);
+    const client = http2.connect(`${parsed.protocol}//${parsed.host}`, {
+      servername: parsed.hostname,
+    });
 
     client.on("error", (err) => {
+      if (hasCurl && !res.headersSent && !res.writableEnded) {
+        return proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res);
+      }
       if (!res.headersSent && !res.writableEnded) {
         res.status(502).json({ error: `HTTP2 stream proxy failed: ${err.message}` });
       }
@@ -701,11 +816,14 @@ function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, res
     const originReferer = reqHeaders["Referer"] || `${parsed.protocol}//${parsed.host}/`;
     const http2Headers = {
       ":method": method === "HEAD" ? "HEAD" : "GET",
+      ":authority": parsed.hostname,
+      ":scheme": parsed.protocol.replace(":", ""),
       ":path": `${parsed.pathname}${parsed.search}`,
       "user-agent": reqHeaders["User-Agent"] || defaultBrowserHeaders["User-Agent"],
       "referer": originReferer,
       "origin": originReferer.replace(/\/+$/, ""),
       "accept": "*/*",
+      "accept-encoding": "identity",
     };
 
     if (reqHeaders["Range"]) {
@@ -716,6 +834,11 @@ function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, res
 
     h2Req.on("response", (headers) => {
       const status = Number(headers[":status"]) || 200;
+      if (status >= 400 && hasCurl && !res.headersSent && !res.writableEnded) {
+        try { client.close(); } catch {}
+        return proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res);
+      }
+
       res.status(status);
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
@@ -763,6 +886,9 @@ function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, res
       } catch {}
     });
   } catch (err) {
+    if (hasCurl && !res.headersSent && !res.writableEnded) {
+      return proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res);
+    }
     if (!res.headersSent && !res.writableEnded) {
       res.status(502).json({ error: `HTTP2 setup failed: ${err.message}` });
     }
@@ -850,7 +976,7 @@ app.all("/api/proxy/stream", async (req, res) => {
       }
     }
 
-    // ─── HTTP/2 Preferred Hosts (e.g. MovieBox / Alibaba Tengine OSS CDN) ───
+    // ─── HTTP/2 & Wangsu/Alibaba CDN Preferred Hosts (e.g. MovieBox) ───
     const isHttp2Preferred =
       targetUrl.includes("hakunaymatata.com") ||
       targetUrl.includes("aoneroom.com") ||
@@ -858,7 +984,10 @@ app.all("/api/proxy/stream", async (req, res) => {
       targetUrl.includes("alicdn");
 
     if (isHttp2Preferred && !isM3u8Url) {
-      return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, res);
+      if (hasCurl) {
+        return proxyWithCurl(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
+      }
+      return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
     }
 
     // ─── Direct Media Range Stream Pipe (MP4 / MKV / TS) ─────────────────
@@ -874,9 +1003,12 @@ app.all("/api/proxy/stream", async (req, res) => {
         validateStatus: (status) => status >= 200 && status < 400,
       });
     } catch (axiosErr) {
-      // If server returned 426 Upgrade Required, automatically retry over HTTP/2
+      // If server returned 426 Upgrade Required, automatically retry over curl or HTTP/2
       if (axiosErr.response?.status === 426 && !isM3u8Url && !res.headersSent) {
-        return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, res);
+        if (hasCurl) {
+          return proxyWithCurl(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
+        }
+        return proxyWithHttp2(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
       }
       throw axiosErr;
     }

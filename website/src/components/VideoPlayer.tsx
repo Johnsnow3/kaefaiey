@@ -325,7 +325,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : streamUrl;
 
       video.src = initialSrc;
-      video.onerror = () => {
+      video.onerror = (e) => {
+        console.warn("Video playback error event:", video.error?.code, video.error?.message, "src:", initialSrc);
         if (!triedProxyRef.current && !initialSrc.includes("/api/proxy/")) {
           triedProxyRef.current = true;
           video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer);
