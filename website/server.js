@@ -975,6 +975,8 @@ app.all("/api/proxy/stream", async (req, res) => {
       originReferer = "https://gofile.io/";
     } else if (targetUrl.includes("vegadrive") || targetUrl.includes("one.vegadrive.app")) {
       originReferer = "https://one.vegadrive.app/";
+    } else if (targetUrl.includes("kartoons.to")) {
+      originReferer = "https://kartoons.to/";
     }
 
     const reqHeaders = {

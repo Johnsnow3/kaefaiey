@@ -11,7 +11,7 @@
   {
     "display_name": "MultiStream",
     "value": "autoEmbed",
-    "version": "3.5",
+    "version": "3.6",
     "icon": "https://cdn.jsdelivr.net/gh/Zenda-Cross/vega-providers@main/assets/autoEmbed.png",
     "type": "global",
     "disabled": false,
@@ -442,7 +442,7 @@
   {
     "display_name": "AnimeSub+",
     "value": "animesub",
-    "version": "1.5",
+    "version": "1.7",
     "icon": "https://animesub.duckdns.org/assets/logo.png",
     "type": "anime",
     "disabled": false,
@@ -506,5 +506,13 @@
     "type": "global",
     "disabled": false,
     "hasSettings": true
+  },
+  {
+    "display_name": "Kartoons",
+    "value": "kartoons",
+    "version": "1.4",
+    "icon": "https://cdn.jsdelivr.net/gh/Zenda-Cross/vega-providers@main/assets/kartoons.png",
+    "type": "anime",
+    "disabled": false
   }
 ]

@@ -39,6 +39,7 @@ const ANIME_PROVIDERS = new Set([
   "animeworld",
   "animerulz",
   "hiAnime",
+  "kartoons",
   "kickAssAnime",
   "kissKh",
   "tokyoInsider",

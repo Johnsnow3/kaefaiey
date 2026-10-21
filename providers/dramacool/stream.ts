@@ -188,17 +188,19 @@ export const getStream = async function ({
       const dv = $embed(el).attr("data-video") || "";
       if (dv && !dv.includes("3rdplayer")) {
         const targetUrl = resolveFullUrl(dv, "https://vidbasic.top");
-        const isM3u8 = targetUrl.includes(".m3u8");
-        const isMp4 = targetUrl.includes(".mp4");
-        streamLinks.push({
-          server: serverName,
-          link: targetUrl,
-          type: isM3u8 ? "m3u8" : (isMp4 ? "mp4" : "embed"),
-          quality: "auto",
-          headers: {
-            Referer: embedUrl,
-          },
-        });
+        const isDirect =
+          targetUrl.includes(".m3u8") || targetUrl.includes(".mp4");
+        if (isDirect) {
+          streamLinks.push({
+            server: serverName,
+            link: targetUrl,
+            type: targetUrl.includes(".m3u8") ? "m3u8" : "mp4",
+            quality: "auto",
+            headers: {
+              Referer: embedUrl,
+            },
+          });
+        }
       }
     });
 
