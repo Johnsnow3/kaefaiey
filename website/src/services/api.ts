@@ -166,12 +166,46 @@ export async function fetchStream(
       streamLink
     )}&type=${type}${isDownload ? "&download=true" : ""}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (data.authRequired || data.needsAuth) {
+      const err: any = new Error(data.message || "Kartoons device linking required");
+      err.authRequired = true;
+      err.code = data.code;
+      err.linkUrl = data.linkUrl;
+      throw err;
+    }
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data.streams || [];
   } catch (err) {
     console.error(`fetchStream error [${providerId}]:`, err);
-    return [];
+    throw err;
+  }
+}
+
+export async function getKartoonsLinkStatus(): Promise<{ linked: boolean; code?: string; linkUrl?: string; expiresIn?: number }> {
+  try {
+    const res = await fetch(`${API_BASE}/api/kartoons/link-status`);
+    return await res.json();
+  } catch {
+    return { linked: false };
+  }
+}
+
+export async function requestKartoonsDeviceCode(): Promise<{ code: string; linkUrl: string }> {
+  const res = await fetch(`${API_BASE}/api/kartoons/link-device`, { method: "POST" });
+  return await res.json();
+}
+
+export async function saveKartoonsToken(token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/kartoons/link-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token }),
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 

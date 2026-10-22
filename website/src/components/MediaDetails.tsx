@@ -8,6 +8,10 @@ import {
   AlertCircle,
   Loader2,
   ChevronDown,
+  Copy,
+  Check,
+  ExternalLink,
+  Tv,
 } from "lucide-react";
 import { Episode, MediaMeta, MediaStream, Post, WatchlistItem } from "../types";
 import {
@@ -17,6 +21,7 @@ import {
   getProxyStreamUrl,
   getVlcUrl,
   getMxPlayerIntent,
+  getKartoonsLinkStatus,
 } from "../services/api";
 import {
   isInWatchlist,
@@ -54,7 +59,43 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
   const [extractingStream, setExtractingStream] = useState(false);
   const [downloadingEpLink, setDownloadingEpLink] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [kartoonsAuthData, setKartoonsAuthData] = useState<{
+    code: string;
+    linkUrl: string;
+    pendingLink?: string;
+    pendingTitle?: string;
+  } | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [checkingKartoonsLink, setCheckingKartoonsLink] = useState(false);
   const [saved, setSaved] = useState(() => isInWatchlist(item.link));
+
+  // Poll Kartoons link status when code is displayed
+  useEffect(() => {
+    if (!kartoonsAuthData) return;
+    let timer: any = null;
+    let active = true;
+
+    async function checkStatus() {
+      try {
+        const res = await getKartoonsLinkStatus();
+        if (!active) return;
+        if (res.linked) {
+          const { pendingLink, pendingTitle } = kartoonsAuthData || {};
+          setKartoonsAuthData(null);
+          setStreamError(null);
+          handleStartPlay(pendingLink, pendingTitle);
+          return;
+        }
+      } catch {}
+      if (active) timer = setTimeout(checkStatus, 3000);
+    }
+
+    timer = setTimeout(checkStatus, 3000);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [kartoonsAuthData]);
 
   // Determine media type
   const isSeries =
@@ -180,10 +221,24 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
         meta?.image || item.image
       );
     } catch (err: any) {
-      setStreamError(
-        err.message ||
-          "Failed to extract streaming link. The source may require a different provider."
-      );
+      if (
+        err.authRequired ||
+        (provider === "kartoons" && err.code) ||
+        (err.message && err.message.toLowerCase().includes("kartoons") && (err.message.toLowerCase().includes("link") || err.message.toLowerCase().includes("auth")))
+      ) {
+        setKartoonsAuthData({
+          code: err.code || "",
+          linkUrl: err.linkUrl || "https://kartoons.to/cloudstream/link",
+          pendingLink: linkToExtract,
+          pendingTitle: titleToPlay,
+        });
+        setStreamError(null);
+      } else {
+        setStreamError(
+          err.message ||
+            "Failed to extract streaming link. The source may require a different provider."
+        );
+      }
     } finally {
       setExtractingStream(false);
     }
@@ -338,6 +393,85 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
               </span>
             </button>
           </div>
+
+          {/* Kartoons Device Linking Card */}
+          {kartoonsAuthData && (
+            <div className="p-4 sm:p-5 rounded-2xl bg-amber-950/40 border border-amber-600/50 space-y-3 shadow-xl">
+              <div className="flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 flex-shrink-0">
+                  <Tv className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm sm:text-base font-bold text-amber-100 leading-snug">
+                    Kartoons Device Linking Required
+                  </h3>
+                  <p className="text-xs text-amber-200/80 mt-1">
+                    Kartoons requires linking your account once to stream media.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-black/50 p-3 sm:p-4 rounded-xl border border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="text-center sm:text-left">
+                  <span className="text-[11px] font-semibold text-zinc-400 block uppercase tracking-wider">
+                    Your Link Code
+                  </span>
+                  <span className="text-2xl sm:text-3xl font-extrabold tracking-widest text-amber-400 font-mono">
+                    {kartoonsAuthData.code || "..."}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto">
+                  <button
+                    onClick={() => {
+                      if (kartoonsAuthData.code) {
+                        navigator.clipboard.writeText(kartoonsAuthData.code);
+                        setCopiedCode(true);
+                        setTimeout(() => setCopiedCode(false), 2000);
+                      }
+                    }}
+                    className="flex-1 sm:flex-initial px-3.5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors active:scale-95"
+                  >
+                    {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCode ? "Copied" : "Copy Code"}</span>
+                  </button>
+
+                  <a
+                    href={kartoonsAuthData.linkUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 sm:flex-initial px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold flex items-center justify-center gap-1.5 transition-all shadow-md active:scale-95"
+                  >
+                    <span>Open Link Page</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-amber-300/80 pt-1">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>Waiting for link approval...</span>
+                </div>
+                <button
+                  onClick={async () => {
+                    setCheckingKartoonsLink(true);
+                    const res = await getKartoonsLinkStatus();
+                    setCheckingKartoonsLink(false);
+                    if (res.linked) {
+                      const { pendingLink, pendingTitle } = kartoonsAuthData || {};
+                      setKartoonsAuthData(null);
+                      handleStartPlay(pendingLink, pendingTitle);
+                    }
+                  }}
+                  disabled={checkingKartoonsLink}
+                  className="text-[11px] text-amber-400 hover:underline font-semibold"
+                >
+                  {checkingKartoonsLink ? "Checking..." : "I have linked it"}
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Error Banner */}
           {streamError && (

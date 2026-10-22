@@ -268,12 +268,104 @@ async function solveWithPlaywright(url, options = {}) {
 
 const commonHeaders = defaultBrowserHeaders;
 
+// ─── Kartoons Device Link Manager ───────────────────────────────────────────
+let activeKartoonsDevice = null;
+let kartoonsPollInterval = null;
+
+async function getOrCreateKartoonsDeviceCode() {
+  if (activeKartoonsDevice && Date.now() < activeKartoonsDevice.expiresAt - 30000) {
+    return activeKartoonsDevice;
+  }
+  try {
+    const res = await axios.post("https://api.kartoons.to/api/cloudstream/device/code", {}, {
+      headers: {
+        "User-Agent": defaultBrowserHeaders["user-agent"],
+        "Origin": "https://kartoons.to",
+        "Referer": "https://kartoons.to/",
+      },
+      timeout: 10000,
+    });
+    if (res.data?.success && res.data?.code) {
+      const code = res.data.code;
+      const expiresMs = (Number(res.data.expires_in) || 600) * 1000;
+      activeKartoonsDevice = {
+        code,
+        linkUrl: `https://kartoons.to/cloudstream/link?code=${code}`,
+        expiresAt: Date.now() + expiresMs,
+        linked: false,
+      };
+      startKartoonsPoller(code);
+      return activeKartoonsDevice;
+    }
+  } catch (err) {
+    console.warn("[Kartoons] Failed to generate device code:", err.message);
+  }
+  return null;
+}
+
+function startKartoonsPoller(code) {
+  if (kartoonsPollInterval) clearInterval(kartoonsPollInterval);
+  kartoonsPollInterval = setInterval(async () => {
+    try {
+      if (!activeKartoonsDevice || activeKartoonsDevice.code !== code || Date.now() >= activeKartoonsDevice.expiresAt) {
+        clearInterval(kartoonsPollInterval);
+        kartoonsPollInterval = null;
+        return;
+      }
+      const res = await axios.get(`https://api.kartoons.to/api/cloudstream/device/status?code=${encodeURIComponent(code)}`, {
+        headers: {
+          "User-Agent": defaultBrowserHeaders["user-agent"],
+          "Origin": "https://kartoons.to",
+          "Referer": "https://kartoons.to/",
+        },
+        timeout: 10000,
+      });
+      const data = res.data?.data || res.data;
+      if (data?.status === "linked" && data?.token) {
+        console.log(`[Kartoons] Device code ${code} approved! Persisting token.`);
+        const session = {
+          token: data.token.trim(),
+          userAgent: defaultBrowserHeaders["user-agent"],
+        };
+        await kvStore.set("kartoons_device_session", session);
+        activeKartoonsDevice.linked = true;
+        clearInterval(kartoonsPollInterval);
+        kartoonsPollInterval = null;
+      } else if (data?.status === "expired") {
+        clearInterval(kartoonsPollInterval);
+        kartoonsPollInterval = null;
+      }
+    } catch (e) {}
+  }, 3000);
+}
+
 const providerContext = {
   axios,
   cheerio,
   commonHeaders,
   kvStore,
   openWebView: async (url, options = {}) => {
+    if (url.includes("kartoons.to") || options.title?.includes("Kartoons")) {
+      const codeMatch = (options.description || "").match(/code\s+([A-Z0-9]{6})/i) || (url.match(/code=([A-Z0-9]{6})/i));
+      const code = codeMatch ? codeMatch[1] : (activeKartoonsDevice?.code);
+      if (code) {
+        activeKartoonsDevice = {
+          code,
+          linkUrl: `https://kartoons.to/cloudstream/link?code=${code}`,
+          expiresAt: Date.now() + 600000,
+          linked: false,
+        };
+        startKartoonsPoller(code);
+      }
+      const saved = await kvStore.get("kartoons_device_session");
+      if (saved?.token && saved.token !== "web_guest") {
+        return {
+          data: JSON.stringify({ kartoonsDevice: true, code: code || "LINKED", token: saved.token }),
+          userAgent: saved.userAgent || defaultBrowserHeaders["user-agent"],
+        };
+      }
+      throw new Error("Kartoons account linking needed. Please approve code on kartoons.to/cloudstream/link");
+    }
     try {
       return await solveWithPlaywright(url, options);
     } catch (err) {
@@ -284,6 +376,27 @@ const providerContext = {
   getCookies: async () => ({}),
   Aes,
 };
+
+function getProviderContext(providerName) {
+  if (providerName !== "kartoons") return providerContext;
+  return {
+    ...providerContext,
+    kvStore: {
+      ...kvStore,
+      get: async (key) => {
+        const val = await kvStore.get(key);
+        if (key === "kartoons_device_session") {
+          if (val && typeof val === "object" && val.token) return val;
+          return {
+            token: "web_guest",
+            userAgent: defaultBrowserHeaders["user-agent"],
+          };
+        }
+        return val;
+      },
+    },
+  };
+}
 
 // ─── Provider Discovery & Registry ──────────────────────────────────────────
 const distDir = path.join(__dirname, "..", "dist");
@@ -528,6 +641,22 @@ app.get("/api/:provider/catalog", async (req, res) => {
       .json({ error: `Catalog not supported by provider '${req.params.provider}'.` });
   }
 
+  if (req.params.provider === "kartoons") {
+    const saved = await kvStore.get("kartoons_device_session");
+    if (!saved?.token || saved.token === "web_guest") {
+      return res.json({
+        provider: "kartoons",
+        catalog: [
+          { title: "Latest Shows", filter: "/catalog/show" },
+          { title: "Latest Movies", filter: "/catalog/movie" },
+          { title: "Popular Shows", filter: "/catalog/show?catalog=popular" },
+          { title: "Popular Movies", filter: "/catalog/movie?catalog=popular" },
+        ],
+        genres: [],
+      });
+    }
+  }
+
   try {
     const mod = provider.endpoints.catalog;
     let catalogData = mod.catalog || mod.default?.catalog;
@@ -536,15 +665,17 @@ app.get("/api/:provider/catalog", async (req, res) => {
     const controller = new AbortController();
     req.on("close", () => controller.abort());
 
+    const activeContext = getProviderContext(req.params.provider);
+
     if (typeof catalogData === "function") {
       catalogData = await catalogData({
-        providerContext,
+        providerContext: activeContext,
         signal: controller.signal,
       });
     }
     if (typeof genresData === "function") {
       genresData = await genresData({
-        providerContext,
+        providerContext: activeContext,
         signal: controller.signal,
       });
     }
@@ -589,7 +720,7 @@ app.get("/api/:provider/posts", async (req, res) => {
       page: parseInt(page, 10) || 1,
       providerValue: String(providerValue || req.params.provider),
       signal: controller.signal,
-      providerContext,
+      providerContext: getProviderContext(req.params.provider),
     });
 
     clearTimeout(timeout);
@@ -648,7 +779,7 @@ app.get("/api/:provider/search", async (req, res) => {
       page: parseInt(page, 10) || 1,
       providerValue: String(providerValue || req.params.provider),
       signal: controller.signal,
-      providerContext,
+      providerContext: getProviderContext(req.params.provider),
     });
 
     clearTimeout(timeout);
@@ -687,6 +818,13 @@ app.get("/api/:provider/meta", async (req, res) => {
       .json({ error: "Query parameter 'link' is required." });
   }
 
+  let rawLink = String(link).trim();
+  if (rawLink.startsWith("%7B") || rawLink.startsWith("%7b") || rawLink.startsWith("%22")) {
+    try {
+      rawLink = decodeURIComponent(rawLink);
+    } catch {}
+  }
+
   try {
     const mod = provider.endpoints.meta;
     const getMetaData =
@@ -703,9 +841,9 @@ app.get("/api/:provider/meta", async (req, res) => {
     }
 
     const meta = await getMetaData({
-      link: String(link),
+      link: rawLink,
       provider: req.params.provider,
-      providerContext,
+      providerContext: getProviderContext(req.params.provider),
     });
 
     const cleanedMeta = clean !== "false" ? cleanMeta(meta) : meta;
@@ -1264,11 +1402,27 @@ app.get("/api/:provider/stream", async (req, res) => {
     req.on("close", () => controller.abort());
     const timeout = setTimeout(() => controller.abort(), 60000);
 
+    if (req.params.provider === "kartoons") {
+      const saved = await kvStore.get("kartoons_device_session");
+      if (!saved?.token || saved.token === "web_guest") {
+        clearTimeout(timeout);
+        const dev = await getOrCreateKartoonsDeviceCode();
+        return res.json({
+          provider: "kartoons",
+          authRequired: true,
+          code: dev?.code || "",
+          linkUrl: dev?.linkUrl || "https://kartoons.to/cloudstream/link",
+          message: `To stream from Kartoons, please open ${dev?.linkUrl || "https://kartoons.to/cloudstream/link"} and approve code ${dev?.code || ""}.`,
+          streams: [],
+        });
+      }
+    }
+
     const streams = await getStream({
       link: rawLink,
       type: String(type),
       signal: controller.signal,
-      providerContext,
+      providerContext: getProviderContext(req.params.provider),
       isDownload: download === "true",
     });
 
@@ -1286,6 +1440,27 @@ app.get("/api/:provider/stream", async (req, res) => {
       streams: cleanedStreams || [],
     });
   } catch (err) {
+    if (req.params.provider === "kartoons") {
+      const isAuthErr = err.message && (
+        err.message.includes("Open the Kartoons catalog") ||
+        err.message.includes("rejected the device link") ||
+        err.message.includes("Authentication required") ||
+        err.message.includes("401")
+      );
+      if (isAuthErr) {
+        await kvStore.delete("kartoons_device_session");
+        activeKartoonsDevice = null;
+        const dev = await getOrCreateKartoonsDeviceCode();
+        return res.json({
+          provider: "kartoons",
+          authRequired: true,
+          code: dev?.code || "",
+          linkUrl: dev?.linkUrl || "https://kartoons.to/cloudstream/link",
+          message: `Kartoons device link required. Please open ${dev?.linkUrl || "https://kartoons.to/cloudstream/link"} and approve code ${dev?.code || ""}.`,
+          streams: [],
+        });
+      }
+    }
     if (err.name === "AbortError") {
       return res.status(408).json({ error: "Stream extraction timed out after 60s." });
     }
@@ -1309,6 +1484,13 @@ app.get("/api/:provider/episodes", async (req, res) => {
       .json({ error: "Query parameter 'url' is required." });
   }
 
+  let rawEpisodeUrl = String(episodeUrl).trim();
+  if (rawEpisodeUrl.startsWith("%7B") || rawEpisodeUrl.startsWith("%7b") || rawEpisodeUrl.startsWith("%22")) {
+    try {
+      rawEpisodeUrl = decodeURIComponent(rawEpisodeUrl);
+    } catch {}
+  }
+
   try {
     const mod = provider.endpoints.episodes;
     const getEpisodeLinks =
@@ -1325,8 +1507,8 @@ app.get("/api/:provider/episodes", async (req, res) => {
     }
 
     const episodes = await getEpisodeLinks({
-      url: String(episodeUrl),
-      providerContext,
+      url: rawEpisodeUrl,
+      providerContext: getProviderContext(req.params.provider),
     });
 
     const cleanedEpisodes =
@@ -1342,6 +1524,44 @@ app.get("/api/:provider/episodes", async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message || "Failed to fetch episodes" });
   }
+});
+
+// ─── Kartoons Device Link Routes ───────────────────────────────────────────
+app.get("/api/kartoons/link-status", async (req, res) => {
+  const saved = await kvStore.get("kartoons_device_session");
+  if (saved?.token && saved.token !== "web_guest") {
+    return res.json({ linked: true, token: saved.token });
+  }
+  const dev = await getOrCreateKartoonsDeviceCode();
+  res.json({
+    linked: false,
+    code: dev?.code || null,
+    linkUrl: dev?.linkUrl || "https://kartoons.to/cloudstream/link",
+    expiresIn: dev ? Math.max(0, Math.floor((dev.expiresAt - Date.now()) / 1000)) : 0,
+  });
+});
+
+app.post("/api/kartoons/link-device", async (req, res) => {
+  activeKartoonsDevice = null;
+  const dev = await getOrCreateKartoonsDeviceCode();
+  res.json({
+    success: true,
+    code: dev?.code || null,
+    linkUrl: dev?.linkUrl || "https://kartoons.to/cloudstream/link",
+  });
+});
+
+app.post("/api/kartoons/link-token", async (req, res) => {
+  const { token } = req.body;
+  if (!token || typeof token !== "string" || !token.trim()) {
+    return res.status(400).json({ error: "Token is required" });
+  }
+  const session = {
+    token: token.trim(),
+    userAgent: defaultBrowserHeaders["user-agent"],
+  };
+  await kvStore.set("kartoons_device_session", session);
+  res.json({ success: true, message: "Kartoons session token saved" });
 });
 
 // 7. Settings Endpoint
