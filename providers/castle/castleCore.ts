@@ -404,8 +404,19 @@ export function parseSeasonLink(link: string): string {
 export function parsePlayLink(link: string): { movieId: string; episodeId: string } {
   const raw = String(link || "").trim();
   let payload = raw;
-  if (raw.startsWith("castle://play/")) payload = decodeURIComponent(raw.substring("castle://play/".length));
+  if (raw.startsWith("castle://play/")) {
+    payload = decodeURIComponent(raw.substring("castle://play/".length));
+  } else if (raw.startsWith("castle://media/")) {
+    payload = decodeURIComponent(raw.substring("castle://media/".length));
+  } else if (raw.startsWith("castle://season/")) {
+    payload = decodeURIComponent(raw.substring("castle://season/".length));
+  }
   const idx = payload.indexOf("_");
-  if (idx === -1) return { movieId: payload, episodeId: "" };
-  return { movieId: payload.substring(0, idx), episodeId: payload.substring(idx + 1) };
+  if (idx === -1) {
+    const cleaned = payload.replace(/[^\d]/g, "");
+    return { movieId: cleaned, episodeId: "" };
+  }
+  const movieId = payload.substring(0, idx).replace(/[^\d]/g, "");
+  const episodeId = payload.substring(idx + 1).replace(/[^\d]/g, "");
+  return { movieId, episodeId };
 }

@@ -977,6 +977,15 @@ app.all("/api/proxy/stream", async (req, res) => {
       originReferer = "https://one.vegadrive.app/";
     } else if (targetUrl.includes("kartoons.to")) {
       originReferer = "https://kartoons.to/";
+    } else if (
+      targetUrl.includes("hscow.com") ||
+      targetUrl.includes("fcxmb.com") ||
+      targetUrl.includes("bhcxy.com") ||
+      targetUrl.includes("fodcyy.com") ||
+      targetUrl.includes("fhxod.com") ||
+      targetUrl.includes("hlowb.com")
+    ) {
+      originReferer = "https://api.hlowb.com/";
     }
 
     const reqHeaders = {
@@ -1117,9 +1126,10 @@ app.all("/api/proxy/stream", async (req, res) => {
       lowerUrl.includes(".woff") ||
       lowerUrl.includes(".ts") ||
       currType.includes("font/woff") ||
+      (lowerUrl.includes(".jpg") && (lowerUrl.includes("hls_mps") || lowerUrl.includes("myhls_mps") || lowerUrl.includes("/hls/"))) ||
       (lowerUrl.includes(".js") && (lowerUrl.includes("/files/") || lowerUrl.includes("/a/") || lowerUrl.includes("makhi") || lowerUrl.includes("freecdn")))
     ) {
-      // NetMirror MPEG-TS chunk disguised as woff2 font or js script
+      // NetMirror / Castle TV MPEG-TS chunk disguised as woff2 font, js script, or jpg image
       res.setHeader("Content-Type", "video/mp2t");
     } else if (
       lowerUrl.includes(".m4s") ||

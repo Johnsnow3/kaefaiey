@@ -241,6 +241,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
     }
     setAvailableSubtitles(combined);
+    if (combined.length > 0 && selectedSubtitleIndex === -1) {
+      const enIdx = combined.findIndex(
+        (s) =>
+          (s.language || "").toLowerCase().startsWith("en") ||
+          (s.title || "").toLowerCase().includes("english")
+      );
+      setSelectedSubtitleIndex(enIdx >= 0 ? enIdx : 0);
+    }
   }, [activeStream, initialSubtitles]);
 
   // Load and parse cues whenever selectedSubtitleIndex changes
@@ -305,7 +313,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       lowerUrl.includes("net52.cc") ||
       lowerUrl.includes("makhi") ||
       lowerUrl.includes("freecdn") ||
-      lowerUrl.includes("imgcdn.kim");
+      lowerUrl.includes("imgcdn.kim") ||
+      lowerUrl.includes("hscow.com") ||
+      lowerUrl.includes("fcxmb.com") ||
+      lowerUrl.includes("bhcxy.com") ||
+      lowerUrl.includes("fodcyy.com") ||
+      lowerUrl.includes("fhxod.com") ||
+      lowerUrl.includes("hls_mps") ||
+      lowerUrl.includes("myhls_mps");
 
     setPlaybackNotice(null);
     setIsBuffering(true);
