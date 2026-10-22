@@ -30,7 +30,7 @@ async function getVisitorData(axios: any, kvStore: any): Promise<string> {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       },
-      timeout: 3000,
+      timeout: 8000,
     });
     const match =
       typeof res?.data === "string"
@@ -118,7 +118,7 @@ async function fetchFromInnerTube(
             Origin: "https://www.youtube.com",
             Referer: `https://www.youtube.com/watch?v=${videoId}`,
           },
-          timeout: 5000,
+          timeout: 15000,
           signal,
         }
       ),
@@ -151,7 +151,7 @@ async function fetchFromInnerTube(
             "User-Agent":
               "Mozilla/5.0 (Linux; Android 12; Quest 3) AppleWebKit/537.36",
           },
-          timeout: 5000,
+          timeout: 15000,
           signal,
         }
       ),

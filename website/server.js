@@ -1072,6 +1072,48 @@ function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, req
   }
 }
 
+function isM3u8Playlist(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    const pathname = parsed.pathname.toLowerCase();
+    const search = parsed.search.toLowerCase();
+
+    // Definite binary segments / media chunks:
+    if (
+      pathname.endsWith(".ts") ||
+      pathname.endsWith(".m4s") ||
+      pathname.endsWith(".mp4") ||
+      pathname.endsWith(".mkv") ||
+      pathname.endsWith(".key") ||
+      pathname.endsWith(".vtt") ||
+      pathname.includes("/file/seg.ts") ||
+      pathname.includes("/seg.ts") ||
+      pathname.includes("/segment-") ||
+      search.includes("file=seg.ts") ||
+      search.includes("is=1") ||
+      (pathname.includes("/videoplayback") && !pathname.endsWith(".m3u8"))
+    ) {
+      return false;
+    }
+
+    if (pathname.endsWith(".m3u8") || pathname.endsWith("/m3u8")) {
+      return true;
+    }
+
+    if (
+      (pathname.includes("hls_variant") || pathname.includes("hls_playlist") || pathname.includes("hls_timedtext_playlist")) &&
+      !pathname.includes("/videoplayback")
+    ) {
+      return true;
+    }
+
+    if (search.includes(".m3u8") && !search.includes("file=seg.ts")) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
 app.all("/api/proxy/stream", async (req, res) => {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1150,7 +1192,7 @@ app.all("/api/proxy/stream", async (req, res) => {
     }
 
     // ─── M3U8 HLS Master/Media Playlist Proxy & Rewriter ───────────────────
-    const isM3u8Url = targetUrl.toLowerCase().includes(".m3u8") || targetUrl.toLowerCase().includes("/m3u8") || targetUrl.toLowerCase().includes("hls_variant");
+    const isM3u8Url = isM3u8Playlist(targetUrl);
     if (isM3u8Url && req.method !== "HEAD") {
       try {
         const m3u8Res = await axios({
@@ -1161,6 +1203,10 @@ app.all("/api/proxy/stream", async (req, res) => {
           timeout: 25000,
           validateStatus: (s) => s >= 200 && s < 400,
         });
+
+        if (!String(m3u8Res.data).trim().startsWith("#EXTM3U")) {
+          throw new Error("Target response is not an M3U8 playlist");
+        }
 
         res.setHeader("Access-Control-Allow-Origin", "*");
         res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
@@ -1262,18 +1308,20 @@ app.all("/api/proxy/stream", async (req, res) => {
     if (
       lowerUrl.includes(".woff2") ||
       lowerUrl.includes(".woff") ||
-      lowerUrl.includes(".ts") ||
+      (lowerUrl.includes(".ts") && !lowerUrl.includes("is=1")) ||
+      lowerUrl.includes("/file/seg.ts") ||
       currType.includes("font/woff") ||
       (lowerUrl.includes(".jpg") && (lowerUrl.includes("hls_mps") || lowerUrl.includes("myhls_mps") || lowerUrl.includes("/hls/"))) ||
       (lowerUrl.includes(".js") && (lowerUrl.includes("/files/") || lowerUrl.includes("/a/") || lowerUrl.includes("makhi") || lowerUrl.includes("freecdn")))
     ) {
-      // NetMirror / Castle TV MPEG-TS chunk disguised as woff2 font, js script, or jpg image
+      // NetMirror / Castle TV / YouTube MPEG-TS chunk disguised as woff2 font, js script, or jpg image
       res.setHeader("Content-Type", "video/mp2t");
     } else if (
       lowerUrl.includes(".m4s") ||
       lowerUrl.includes(".mp4") ||
       lowerUrl.includes(".m4v") ||
       lowerUrl.includes(".mkv") ||
+      lowerUrl.includes("is=1") ||
       currType.includes("octet-stream") ||
       currType.includes("text/html")
     ) {

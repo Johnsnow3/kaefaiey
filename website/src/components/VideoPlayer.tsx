@@ -683,6 +683,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   };
 
   const streamUrl = activeStream?.link || "";
+  const lowerUrl = streamUrl.toLowerCase();
+  const needsProxy =
+    Boolean(activeStream?.headers?.Referer) ||
+    Boolean(activeStream?.headers?.Cookie) ||
+    activeStream?.type === "mkv" ||
+    lowerUrl.includes(".mkv") ||
+    lowerUrl.includes("googlevideo.com") ||
+    lowerUrl.includes("youtube.com") ||
+    lowerUrl.includes("mxplayer.in") ||
+    lowerUrl.includes("cloudfront.net") ||
+    lowerUrl.includes("hakunaymatata.com") ||
+    lowerUrl.includes("officialmoviebox.com") ||
+    lowerUrl.includes("net52.cc") ||
+    lowerUrl.includes("makhi") ||
+    lowerUrl.includes("freecdn") ||
+    lowerUrl.includes("imgcdn.kim") ||
+    lowerUrl.includes("hscow.com") ||
+    lowerUrl.includes("fcxmb.com") ||
+    lowerUrl.includes("bhcxy.com") ||
+    lowerUrl.includes("fodcyy.com") ||
+    lowerUrl.includes("fhxod.com") ||
+    lowerUrl.includes("hls_mps") ||
+    lowerUrl.includes("myhls_mps");
+
+  const effectivePlayUrl = needsProxy
+    ? getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer, activeStream?.headers?.Cookie)
+    : streamUrl;
 
   // Display audio tracks (matching Image 4)
   const displayAudioTracks = audioTracks.length > 0 ? audioTracks : [
@@ -1344,21 +1371,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <a
-              href={getVlcUrl(streamUrl)}
+              href={getVlcUrl(effectivePlayUrl)}
               className="px-4 py-2.5 rounded-xl font-bold text-xs bg-orange-600 hover:bg-orange-500 text-white flex items-center gap-2 shadow-lg"
             >
               <Play className="w-3.5 h-3.5 fill-white" />
               Play in VLC
             </a>
             <a
-              href={getMxPlayerIntent(streamUrl, title)}
+              href={getMxPlayerIntent(effectivePlayUrl, title)}
               className="px-4 py-2.5 rounded-xl font-bold text-xs bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-2 shadow-lg"
             >
               <Play className="w-3.5 h-3.5 fill-white" />
               Play in MX Player
             </a>
             <a
-              href={getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer)}
+              href={getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer, activeStream?.headers?.Cookie, true, `${title || "video"}.mp4`)}
               download={title || "video.mp4"}
               target="_blank"
               rel="noreferrer"
