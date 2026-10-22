@@ -139,6 +139,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const hlsRef = useRef<Hls | null>(null);
   const triedProxyRef = useRef(false);
   const triedDirectRef = useRef(false);
+  const savedTimeRef = useRef<number>(0);
 
   // Active Server Stream - Prioritize first HLS (m3u8) stream for maximum browser playback compatibility
   const initialIndex = resolvedStreams.findIndex(
@@ -238,10 +239,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const combined: (SubtitleTrack & { hlsTrackId?: number })[] = [
       ...initialSubtitles.filter(isRealSub),
     ];
-    if (activeStream?.subtitles) {
-      for (const s of activeStream.subtitles) {
-        if (isRealSub(s) && !combined.some((x) => x.uri === s.uri)) {
-          combined.push(s);
+    for (const str of resolvedStreams) {
+      if (str?.subtitles && Array.isArray(str.subtitles)) {
+        for (const s of str.subtitles) {
+          if (
+            isRealSub(s) &&
+            !combined.some(
+              (x) =>
+                x.uri === s.uri ||
+                (x.title === s.title && x.language === s.language)
+            )
+          ) {
+            combined.push(s);
+          }
         }
       }
     }
@@ -254,7 +264,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       );
       setSelectedSubtitleIndex(enIdx >= 0 ? enIdx : 0);
     }
-  }, [activeStream, initialSubtitles]);
+  }, [resolvedStreams, initialSubtitles]);
 
   // Load and parse cues whenever selectedSubtitleIndex changes
   useEffect(() => {
@@ -374,6 +384,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
         setIsBuffering(false);
+        if (savedTimeRef.current > 0) {
+          try {
+            video.currentTime = savedTimeRef.current;
+          } catch {}
+          savedTimeRef.current = 0;
+        }
         video.play().catch(() => {});
         setIsPlaying(true);
 
@@ -645,8 +661,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   const handleAudioChange = (trackId: number) => {
     setSelectedAudioTrack(trackId);
-    if (hlsRef.current) {
-      hlsRef.current.audioTrack = trackId;
+    if (audioTracks.length > 0) {
+      if (hlsRef.current) {
+        hlsRef.current.audioTrack = trackId;
+      }
+    } else {
+      const opt = streamAudioOptions.find((o) => o.id === trackId);
+      if (opt && opt.streamIndex !== selectedStreamIndex) {
+        if (videoRef.current) {
+          savedTimeRef.current = videoRef.current.currentTime || currentTime;
+        }
+        setSelectedStreamIndex(opt.streamIndex);
+      }
     }
     setActiveSheet("none");
   };
@@ -716,18 +742,79 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     ? getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer, activeStream?.headers?.Cookie)
     : streamUrl;
 
+  // When embedded HLS tracks are absent (typical for anime providers), detect server audio options (Dub vs Sub, etc.)
+  const streamAudioOptions = React.useMemo(() => {
+    if (audioTracks.length > 0) return [];
+
+    const options: { id: number; streamIndex: number; name: string; lang: string; codec?: string }[] = [];
+    const seen = new Set<string>();
+
+    resolvedStreams.forEach((s, idx) => {
+      const serverLower = (s.server || "").toLowerCase();
+      let lang = "en";
+      let label = s.server || `Stream ${idx + 1}`;
+
+      if (serverLower.includes("(dub)") || serverLower.includes(" dub")) {
+        lang = "en";
+        label = "English (Dub)";
+      } else if (serverLower.includes("(sub)") || serverLower.includes(" sub")) {
+        lang = "ja";
+        label = "Japanese (Sub)";
+      } else if (serverLower.includes("hindi")) {
+        lang = "hi";
+        label = "Hindi";
+      } else if (serverLower.includes("tamil")) {
+        lang = "ta";
+        label = "Tamil";
+      } else if (serverLower.includes("telugu")) {
+        lang = "te";
+        label = "Telugu";
+      } else if (serverLower.includes("malayalam")) {
+        lang = "ml";
+        label = "Malayalam";
+      } else if (serverLower.includes("kannada")) {
+        lang = "kn";
+        label = "Kannada";
+      }
+
+      if (!seen.has(label)) {
+        seen.add(label);
+        options.push({
+          id: idx,
+          streamIndex: idx,
+          name: label,
+          lang,
+          codec: s.type === "m3u8" ? "audio/aac (HLS)" : "audio/mp4a-latm",
+        });
+      }
+    });
+
+    return options;
+  }, [audioTracks, resolvedStreams]);
+
   // Display audio tracks (matching Image 4)
-  const displayAudioTracks = audioTracks.length > 0 ? audioTracks : [
-    { id: 0, name: "Default Audio", lang: "hi", codec: "audio/mp4a-latm" },
-  ];
+  const displayAudioTracks =
+    audioTracks.length > 0
+      ? audioTracks
+      : streamAudioOptions.length > 0
+      ? streamAudioOptions
+      : [{ id: 0, name: "Default Audio", lang: "hi", codec: "audio/mp4a-latm" }];
 
   // Active cue text for floating subtitles (bulletproof rendering on mobile landscape and portrait)
   const activeCueText = selectedSubtitleIndex >= 0
     ? activeCues.find((c) => currentTime >= c.start && currentTime <= c.end)?.text || null
     : null;
 
-  // Active audio label for bottom bar (e.g. "Hi")
-  const activeAudioDisplay = displayAudioTracks.find((t) => t.id === selectedAudioTrack)?.lang?.toUpperCase() || "HI";
+  // Active audio label for bottom bar (e.g. "Hi", "EN", "JA")
+  const activeAudioDisplay =
+    audioTracks.length > 0
+      ? displayAudioTracks.find((t) => t.id === selectedAudioTrack)?.lang?.toUpperCase() || "HI"
+      : streamAudioOptions.length > 0
+      ? (
+          streamAudioOptions.find((o) => o.streamIndex === selectedStreamIndex)?.lang ||
+          (resolvedStreams[selectedStreamIndex]?.server?.toLowerCase().includes("dub") ? "EN" : "JA")
+        ).toUpperCase()
+      : "HI";
 
   // Active subtitle label for bottom bar (e.g. "None" or "English")
   const activeSubDisplay = selectedSubtitleIndex >= 0
@@ -1070,7 +1157,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             {/* Audio Items matching Image 4 */}
             <div className="space-y-2.5 mt-4 max-h-72 overflow-y-auto custom-scrollbar pr-1">
               {displayAudioTracks.map((t, idx) => {
-                const isSelected = selectedAudioTrack === t.id;
+                const isSelected =
+                  audioTracks.length > 0
+                    ? selectedAudioTrack === t.id
+                    : (t as any).streamIndex !== undefined
+                    ? (t as any).streamIndex === selectedStreamIndex
+                    : selectedAudioTrack === t.id;
                 return (
                   <div
                     key={idx}

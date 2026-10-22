@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Play,
@@ -13,7 +13,7 @@ import {
   ExternalLink,
   Tv,
 } from "lucide-react";
-import { Episode, MediaMeta, MediaStream, Post, WatchlistItem } from "../types";
+import { Episode, MediaMeta, MediaStream, Post, SubtitleTrack, WatchlistItem } from "../types";
 import {
   fetchEpisodes,
   fetchMeta,
@@ -56,6 +56,9 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [selectedSeason, setSelectedSeason] = useState<number>(1);
+  const [selectedSeasonIndex, setSelectedSeasonIndex] = useState<number>(0);
+  const [showSeasonDropdown, setShowSeasonDropdown] = useState<boolean>(false);
+  const seasonDropdownRef = useRef<HTMLDivElement>(null);
   const [extractingStream, setExtractingStream] = useState(false);
   const [downloadingEpLink, setDownloadingEpLink] = useState<string | null>(null);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -68,6 +71,21 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
   const [copiedCode, setCopiedCode] = useState(false);
   const [checkingKartoonsLink, setCheckingKartoonsLink] = useState(false);
   const [saved, setSaved] = useState(() => isInWatchlist(item.link));
+
+  // Close season dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (seasonDropdownRef.current && !seasonDropdownRef.current.contains(e.target as Node)) {
+        setShowSeasonDropdown(false);
+      }
+    };
+    if (showSeasonDropdown) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showSeasonDropdown]);
 
   // Poll Kartoons link status when code is displayed
   useEffect(() => {
@@ -103,7 +121,9 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
     item.cornerTag?.toLowerCase().includes("series") ||
     item.title?.toLowerCase().includes("season") ||
     item.title?.toLowerCase().includes("episode") ||
-    meta?.type === "series";
+    meta?.type === "series" ||
+    Boolean(meta?.linkList && meta.linkList.length > 1) ||
+    Boolean((meta?.linkList?.[0]?.directLinks?.length || 0) > 1);
 
   // Fetch meta on mount
   useEffect(() => {
@@ -116,15 +136,34 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
         if (!isMounted) return;
         setMeta(data);
 
-        // If meta has episodesLink, fetch episodes
+        // Load episodes for initial season / episode range
         if (data?.linkList && data.linkList.length > 0) {
-          const firstWithEpisodes = data.linkList.find((l) => l.episodesLink);
-          if (firstWithEpisodes?.episodesLink) {
+          setSelectedSeasonIndex(0);
+          setSelectedSeason(1);
+          const firstGroup = data.linkList[0];
+          if (firstGroup?.directLinks && firstGroup.directLinks.length > 0) {
+            setEpisodes(firstGroup.directLinks);
+          } else if (firstGroup?.episodesLink) {
             setLoadingEpisodes(true);
-            const eps = await fetchEpisodes(provider, firstWithEpisodes.episodesLink);
+            const eps = await fetchEpisodes(provider, firstGroup.episodesLink);
             if (isMounted) {
               setEpisodes(eps);
               setLoadingEpisodes(false);
+            }
+          } else {
+            // Find any group with directLinks or episodesLink
+            const anyGroup = data.linkList.find(
+              (g) => (g.directLinks && g.directLinks.length > 0) || g.episodesLink
+            );
+            if (anyGroup?.directLinks && anyGroup.directLinks.length > 0) {
+              setEpisodes(anyGroup.directLinks);
+            } else if (anyGroup?.episodesLink) {
+              setLoadingEpisodes(true);
+              const eps = await fetchEpisodes(provider, anyGroup.episodesLink);
+              if (isMounted) {
+                setEpisodes(eps);
+                setLoadingEpisodes(false);
+              }
             }
           }
         }
@@ -140,6 +179,28 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
       isMounted = false;
     };
   }, [item.link, provider]);
+
+  const handleSeasonSelect = async (index: number) => {
+    setSelectedSeasonIndex(index);
+    setSelectedSeason(index + 1);
+    setShowSeasonDropdown(false);
+    const group = meta?.linkList?.[index];
+    if (!group) return;
+
+    if (group.directLinks && group.directLinks.length > 0) {
+      setEpisodes(group.directLinks);
+    } else if (group.episodesLink) {
+      setLoadingEpisodes(true);
+      try {
+        const eps = await fetchEpisodes(provider, group.episodesLink);
+        setEpisodes(eps);
+      } catch (err) {
+        console.error("Failed to load season episodes:", err);
+      } finally {
+        setLoadingEpisodes(false);
+      }
+    }
+  };
 
   const toggleWatchlist = () => {
     if (saved) {
@@ -174,11 +235,14 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
       if (isSeries) {
         let currentEpisodes = episodes;
         if (currentEpisodes.length === 0 && meta?.linkList) {
-          const firstWithEpisodes = meta.linkList.find((l) => l.episodesLink);
-          if (firstWithEpisodes?.episodesLink) {
+          const activeGroup = meta.linkList[selectedSeasonIndex] || meta.linkList[0];
+          if (activeGroup?.directLinks && activeGroup.directLinks.length > 0) {
+            currentEpisodes = activeGroup.directLinks;
+            setEpisodes(currentEpisodes);
+          } else if (activeGroup?.episodesLink) {
             try {
               setLoadingEpisodes(true);
-              currentEpisodes = await fetchEpisodes(provider, firstWithEpisodes.episodesLink);
+              currentEpisodes = await fetchEpisodes(provider, activeGroup.episodesLink);
               setEpisodes(currentEpisodes);
             } catch (err) {
               console.warn("Auto-fetching episodes failed:", err);
@@ -197,9 +261,10 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
       }
 
       if (!linkToExtract) {
+        const activeGroup = meta?.linkList?.[selectedSeasonIndex] || meta?.linkList?.[0];
         linkToExtract =
-          meta?.linkList?.[0]?.directLinks?.[0]?.link ||
-          meta?.linkList?.[0]?.episodesLink ||
+          activeGroup?.directLinks?.[0]?.link ||
+          activeGroup?.episodesLink ||
           item.link;
       }
     }
@@ -212,6 +277,33 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
         throw new Error(
           "No streams could be found for this title on this provider. Please try another provider."
         );
+      }
+
+      // Aggregate all subtitles across all streams so both DUB & SUB subtitles are available
+      const mergedSubs: SubtitleTrack[] = [];
+      streams.forEach((s) => {
+        if (s.subtitles && Array.isArray(s.subtitles)) {
+          s.subtitles.forEach((sub) => {
+            if (
+              sub.uri &&
+              !mergedSubs.some(
+                (existing) =>
+                  existing.uri === sub.uri ||
+                  (existing.title === sub.title && existing.language === sub.language)
+              )
+            ) {
+              mergedSubs.push(sub);
+            }
+          });
+        }
+      });
+
+      if (mergedSubs.length > 0) {
+        streams.forEach((s) => {
+          if (!s.subtitles || s.subtitles.length === 0) {
+            s.subtitles = mergedSubs;
+          }
+        });
       }
 
       onPlay(
@@ -514,15 +606,62 @@ export const MediaDetails: React.FC<MediaDetailsProps> = ({
             )}
           </button>
 
-          {/* Season Selector Dropdown (for series) */}
-          {isSeries && (
-            <div className="relative pt-1">
+          {/* Season Selector Dropdown (for series or multiple episode ranges) */}
+          {((isSeries || (meta?.linkList && meta.linkList.length > 0)) && (meta?.linkList && meta.linkList.length > 0)) && (
+            <div className="relative pt-1 z-30" ref={seasonDropdownRef}>
               <button
-                className="w-full py-3 px-4 rounded-xl bg-[#18181b] border border-zinc-800/80 text-sm font-semibold text-white flex items-center justify-between"
+                type="button"
+                onClick={() => setShowSeasonDropdown((prev) => !prev)}
+                className="w-full py-3 px-4 rounded-xl bg-[#18181b] border border-zinc-800/80 hover:border-zinc-700 text-sm font-semibold text-white flex items-center justify-between transition-colors shadow-sm"
               >
-                <span>Season {selectedSeason}</span>
-                <ChevronDown className="w-4 h-4 text-zinc-400" />
+                <div className="flex items-center gap-2">
+                  <Tv className="w-4 h-4 text-[#ff8a80]" />
+                  <span>
+                    {meta.linkList[selectedSeasonIndex]?.title || `Season ${selectedSeasonIndex + 1}`}
+                  </span>
+                  {meta.linkList[selectedSeasonIndex]?.directLinks?.length ? (
+                    <span className="text-[11px] font-normal text-zinc-400">
+                      ({meta.linkList[selectedSeasonIndex].directLinks.length} episodes)
+                    </span>
+                  ) : null}
+                </div>
+                <ChevronDown
+                  className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${
+                    showSeasonDropdown ? "rotate-180 text-white" : ""
+                  }`}
+                />
               </button>
+
+              {showSeasonDropdown && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 max-h-64 overflow-y-auto bg-[#18181c] border border-zinc-800 rounded-xl shadow-2xl p-1.5 space-y-1 z-40 custom-scrollbar animate-fadeIn">
+                  {meta.linkList.map((group, idx) => {
+                    const isSelected = idx === selectedSeasonIndex;
+                    const count = group.directLinks?.length;
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => handleSeasonSelect(idx)}
+                        className={`w-full py-2.5 px-3 rounded-lg text-left text-sm flex items-center justify-between transition-colors ${
+                          isSelected
+                            ? "bg-[#ff8a80]/15 text-[#ff8a80] font-bold"
+                            : "text-zinc-300 hover:bg-zinc-800/70 hover:text-white font-medium"
+                        }`}
+                      >
+                        <span className="truncate">{group.title || `Season ${idx + 1}`}</span>
+                        <div className="flex items-center gap-2">
+                          {count !== undefined && (
+                            <span className="text-[11px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-400">
+                              {count} eps
+                            </span>
+                          )}
+                          {isSelected && <Check className="w-4 h-4 text-[#ff8a80] stroke-[2.5]" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 

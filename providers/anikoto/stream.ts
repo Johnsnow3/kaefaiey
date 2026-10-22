@@ -695,9 +695,7 @@ export const getStream = async function ({
                     title: t.label,
                     language: inferLang(t.label),
                     type: "text/vtt" as const,
-                    uri: `https://fetch.1proxy.workers.dev/fetch?url=${encodeURIComponent(
-                      t.file
-                    )}&headers=${encodeURIComponent(JSON.stringify(streamHeaders))}`,
+                    uri: t.file,
                   }));
 
                 // Add Master stream

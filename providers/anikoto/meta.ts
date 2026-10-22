@@ -138,24 +138,21 @@ export const getMeta = async function ({
 
       if (epRes.data && epRes.data.status === 200 && epRes.data.result) {
         const $ep = cheerio.load(epRes.data.result);
-        const epElements = $ep(
-          "ul.ep-range a, .ep-range a, .range a, a[data-ids]"
-        );
+        const rangeUlList = $ep("ul.ep-range, ul[data-range]");
 
-        const directLinks: EpisodeLink[] = [];
-
-        epElements.each((_, el) => {
+        const mapEpisode = (el: any): EpisodeLink | null => {
           const num = $ep(el).attr("data-num") || "";
-          if (!num) return;
+          if (!num) return null;
 
           const dataIds = $ep(el).attr("data-ids") || "";
           const malId = $ep(el).attr("data-mal") || "";
           const timestamp = $ep(el).attr("data-timestamp") || "";
           const hasSub = $ep(el).attr("data-sub") === "1";
           const hasDub = $ep(el).attr("data-dub") === "1";
-          let epTitle = $ep(el).attr("title") || `Episode ${num}`;
+          const rawTitle = $ep(el).attr("title") || "";
+          const epTitle = rawTitle && rawTitle !== num ? `Episode ${num} - ${rawTitle}` : `Episode ${num}`;
 
-          directLinks.push({
+          return {
             title: epTitle,
             link: JSON.stringify({
               slug,
@@ -167,21 +164,72 @@ export const getMeta = async function ({
               hasDub,
               title: epTitle,
             }),
-          });
-        });
+          };
+        };
 
-        if (directLinks.length > 0) {
-          linkList.push({
-            title: title,
-            directLinks,
+        if (rangeUlList.length > 1) {
+          // Multiple range groups (e.g. One Piece: 001-100, 101-200, etc.)
+          rangeUlList.each((idx, ul) => {
+            const rawRange = $ep(ul).attr("data-range") || "";
+            let rangeLabel = rawRange;
+            if (rawRange) {
+              const parts = rawRange.split("-");
+              const start = parseInt(parts[0], 10);
+              const end = parseInt(parts[1], 10);
+              if (!isNaN(start) && !isNaN(end)) {
+                rangeLabel = `Episodes ${start}-${end}`;
+              } else {
+                rangeLabel = `Episodes ${rawRange}`;
+              }
+            } else {
+              rangeLabel = `Season ${idx + 1}`;
+            }
+
+            const directLinks: EpisodeLink[] = [];
+            $ep(ul).find("a").each((_, el) => {
+              const ep = mapEpisode(el);
+              if (ep) directLinks.push(ep);
+            });
+
+            if (directLinks.length > 0) {
+              linkList.push({
+                title: rangeLabel,
+                directLinks,
+              });
+            }
           });
+        } else {
+          // Single list of episodes
+          const allLinks: EpisodeLink[] = [];
+          $ep("a[data-num]").each((_, el) => {
+            const ep = mapEpisode(el);
+            if (ep) allLinks.push(ep);
+          });
+
+          if (allLinks.length > 100) {
+            // Split into 100-episode chunks for convenient season dropdown navigation
+            for (let i = 0; i < allLinks.length; i += 100) {
+              const chunk = allLinks.slice(i, i + 100);
+              const start = i + 1;
+              const end = Math.min(i + 100, allLinks.length);
+              linkList.push({
+                title: `Episodes ${start}-${end}`,
+                directLinks: chunk,
+              });
+            }
+          } else if (allLinks.length > 0) {
+            linkList.push({
+              title: "Season 1",
+              directLinks: allLinks,
+            });
+          }
         }
       }
     }
 
     if (linkList.length === 0) {
       linkList.push({
-        title: title,
+        title: type === "movie" ? "Movie" : "Season 1",
         directLinks: [
           {
             title: type === "movie" ? "Movie" : "Episode 1",
@@ -193,7 +241,7 @@ export const getMeta = async function ({
               timestamp: "",
               hasSub: true,
               hasDub: false,
-              title,
+              title: type === "movie" ? "Movie" : "Episode 1",
             }),
             type: type as "movie" | "series",
           },

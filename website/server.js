@@ -1398,6 +1398,16 @@ app.get("/api/proxy/subtitle", async (req, res) => {
       } catch {}
     }
 
+    if (
+      String(targetUrl).includes("embermeadow.world") ||
+      String(targetUrl).includes("megaplay") ||
+      String(targetUrl).includes("nexabloom.top") ||
+      String(targetUrl).includes("shiora.top")
+    ) {
+      subHeaders["Referer"] = "https://megaplay.buzz/";
+      subHeaders["Origin"] = "https://megaplay.buzz";
+    }
+
     const subRes = await axios.get(String(targetUrl), {
       responseType: "text",
       headers: subHeaders,
