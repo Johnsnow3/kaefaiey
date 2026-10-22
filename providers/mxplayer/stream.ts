@@ -59,7 +59,32 @@ export const getStream = async function ({
     try {
       const data = JSON.parse(link);
       streamObj = data.stream || null;
-      videoHash = data.videoHash || null;
+      videoHash = data.videoHash || data.stream?.videoHash || null;
+      const parsedId = data.id || data.stream?.mxplay?.contentId;
+
+      const hasStreamUrl =
+        streamObj &&
+        (streamObj.hls?.high ||
+          streamObj.hls?.base ||
+          streamObj.hls?.main ||
+          streamObj.mxplay?.hls?.high ||
+          streamObj.mxplay?.hls?.base ||
+          streamObj.mxplay?.hls?.main ||
+          streamObj.thirdParty?.hlsUrl ||
+          streamObj.thirdParty?.dashUrl ||
+          streamObj.dash?.high ||
+          streamObj.mxplay?.dash?.high);
+
+      if (!hasStreamUrl && parsedId) {
+        try {
+          const epApi = `${API_URL}/detail/video?id=${parsedId}&type=episode&${desktopParams}`;
+          const res = await axios.get(epApi, { headers: defaultHeaders, timeout: 6000 });
+          if (res.data?.stream) {
+            streamObj = res.data.stream;
+            videoHash = res.data.stream.videoHash || videoHash;
+          }
+        } catch {}
+      }
     } catch (e) {
       console.error("Failed to parse stream JSON:", e);
     }
@@ -70,67 +95,29 @@ export const getStream = async function ({
   // ===============================
   else {
     try {
-      const isShow = link.includes("/tvshow/") || link.includes("/show/") || type === "series";
-
       // Match 32-character hex ID (e.g. bdc097c9e69456d31d767fa64dc41f28)
       const hexMatch = link.match(/([a-f0-9]{32})/i);
       const id = hexMatch ? hexMatch[1] : null;
 
-      if (id && !isShow) {
-        // ── Movie Stream Extraction ──
-        let movieTitle = "";
+      const isEp = link.includes("/episode/") || type === "episode";
+      const isTvShow = (link.includes("/tvshow/") || link.includes("/show/") || type === "series") && !isEp;
 
-        // 1. Video Details REST API
+      // ─── 1. If explicitly an episode ───
+      if (id && isEp) {
         try {
-          const videoApi = `${API_URL}/detail/video?id=${id}&type=movie&${desktopParams}`;
+          const videoApi = `${API_URL}/detail/video?id=${id}&type=episode&${desktopParams}`;
           const res = await axios.get(videoApi, { headers: defaultHeaders, timeout: 6000 });
-          if (res.data) {
-            movieTitle = res.data.title || "";
-            streamObj = res.data.stream || null;
-            const raw = JSON.stringify(res.data);
-            const hMatch = raw.match(/video\/([a-f0-9]{64})\//i);
-            if (hMatch) videoHash = hMatch[1];
+          if (res.data?.stream) {
+            streamObj = res.data.stream;
+            videoHash = res.data.stream.videoHash || null;
           }
         } catch (err: any) {
-          console.warn("MX detail/video request failed:", err.message);
+          console.warn("MX episode detail/video request failed:", err.message);
         }
+      }
 
-        // 2. Search by Title Fallback (Search results contain full stream object)
-        const hasDirectStream =
-          streamObj &&
-          (streamObj.hls || streamObj.dash || streamObj.thirdParty || streamObj.mxplay);
-
-        if (!hasDirectStream && movieTitle) {
-          try {
-            const searchUrl = `${API_URL}/search/resultv2?query=${encodeURIComponent(movieTitle)}&${desktopParams}`;
-            const sRes = await axios.post(searchUrl, {}, { headers: defaultHeaders, timeout: 6000 });
-            const sections = sRes.data?.sections || [];
-            for (const s of sections) {
-              const item = (s.items || []).find((it: any) => it.id === id);
-              if (item?.stream) {
-                streamObj = item.stream;
-                break;
-              }
-            }
-          } catch (err: any) {
-            console.warn("MX search stream fallback failed:", err.message);
-          }
-        }
-
-        // 3. Fallback: Movie Recommended Endpoint
-        if (!streamObj || (!streamObj.hls && !streamObj.thirdParty && !streamObj.mxplay)) {
-          try {
-            const apiUrl = `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}&${desktopParams}`;
-            const res = await axios.get(apiUrl, { headers: defaultHeaders, timeout: 5000 });
-            const items = res.data?.items || [];
-            const directMatch = items.find((it: any) => it.id === id);
-            if (directMatch?.stream) {
-              streamObj = directMatch.stream;
-            }
-          } catch {}
-        }
-      } else if (id && isShow) {
-        // ── TV Show / Series Stream Extraction ──
+      // ─── 2. TV Show Container / Series ───
+      else if (id && isTvShow) {
         let seasonId = id;
         try {
           const seasonsUrl = `${API_URL}/detail/tab/tvshowseasons?type=tvshow&id=${id}&${desktopParams}`;
@@ -146,15 +133,110 @@ export const getStream = async function ({
           const epApi = `${API_URL}/detail/tab/tvshowepisodes?type=season&id=${seasonId}&sortOrder=0&${desktopParams}`;
           const epRes = await axios.get(epApi, { headers: defaultHeaders, timeout: 6000 });
           const items = epRes.data?.items || [];
-          streamObj = items[0]?.stream || null;
-          if (items[0]?.videoHash) {
-            videoHash = items[0].videoHash;
-          } else {
-            const raw = JSON.stringify(items[0] || {});
-            const hMatch = raw.match(/video\/([a-f0-9]{64})\//i);
-            if (hMatch) videoHash = hMatch[1];
+          if (items.length > 0) {
+            streamObj = items[0]?.stream || null;
+            videoHash = items[0]?.stream?.videoHash || items[0]?.videoHash || null;
+            if (!videoHash) {
+              const raw = JSON.stringify(items[0] || {});
+              const hMatch = raw.match(/video\/([a-f0-9]{64})\//i);
+              if (hMatch) videoHash = hMatch[1];
+            }
           }
         } catch {}
+
+        // Fallback: If tvshowseasons failed (e.g. this was actually an episode ID), try detail/video with type=episode
+        if (!streamObj) {
+          try {
+            const epApi = `${API_URL}/detail/video?id=${id}&type=episode&${desktopParams}`;
+            const res = await axios.get(epApi, { headers: defaultHeaders, timeout: 5000 });
+            if (res.data?.stream) {
+              streamObj = res.data.stream;
+              videoHash = res.data.stream.videoHash || null;
+            }
+          } catch {}
+        }
+      }
+
+      // ─── 3. Movie or Generic / Unknown ID ───
+      else if (id) {
+        let movieTitle = "";
+
+        // 3a. Video Details REST API with type=movie
+        try {
+          const videoApi = `${API_URL}/detail/video?id=${id}&type=movie&${desktopParams}`;
+          const res = await axios.get(videoApi, { headers: defaultHeaders, timeout: 6000 });
+          if (res.data) {
+            movieTitle = res.data.title || "";
+            streamObj = res.data.stream || null;
+            videoHash = res.data.stream?.videoHash || null;
+            if (!videoHash) {
+              const raw = JSON.stringify(res.data);
+              const hMatch = raw.match(/video\/([a-f0-9]{64})\//i);
+              if (hMatch) videoHash = hMatch[1];
+            }
+          }
+        } catch (err: any) {
+          // If 444 or 400, this might be an episode or show ID
+          if (err.response?.status === 444 || err.response?.status === 400) {
+            try {
+              const epApi = `${API_URL}/detail/video?id=${id}&type=episode&${desktopParams}`;
+              const epRes = await axios.get(epApi, { headers: defaultHeaders, timeout: 5000 });
+              if (epRes.data?.stream) {
+                streamObj = epRes.data.stream;
+                videoHash = epRes.data.stream.videoHash || null;
+              }
+            } catch {}
+          }
+        }
+
+        // 3b. Search by Title Fallback (Search results contain full stream object)
+        const hasDirectStream =
+          streamObj &&
+          (streamObj.hls || streamObj.dash || streamObj.thirdParty || streamObj.mxplay);
+
+        if (!hasDirectStream && movieTitle) {
+          try {
+            const searchUrl = `${API_URL}/search/resultv2?query=${encodeURIComponent(movieTitle)}&${desktopParams}`;
+            const sRes = await axios.post(searchUrl, {}, { headers: defaultHeaders, timeout: 6000 });
+            const sections = sRes.data?.sections || [];
+            for (const s of sections) {
+              const item = (s.items || []).find((it: any) => it.id === id);
+              if (item?.stream) {
+                streamObj = item.stream;
+                videoHash = item.stream.videoHash || videoHash;
+                break;
+              }
+            }
+          } catch (err: any) {
+            console.warn("MX search stream fallback failed:", err.message);
+          }
+        }
+
+        // 3c. Fallback: Movie Recommended Endpoint
+        if (!streamObj || (!streamObj.hls && !streamObj.thirdParty && !streamObj.mxplay)) {
+          try {
+            const apiUrl = `${API_URL}/detail/tab/movierecommended?type=movie&id=${id}&${desktopParams}`;
+            const res = await axios.get(apiUrl, { headers: defaultHeaders, timeout: 5000 });
+            const items = res.data?.items || [];
+            const directMatch = items.find((it: any) => it.id === id);
+            if (directMatch?.stream) {
+              streamObj = directMatch.stream;
+              videoHash = directMatch.stream.videoHash || videoHash;
+            }
+          } catch {}
+        }
+
+        // 3d. Fallback: If still no stream, try type=episode
+        if (!streamObj) {
+          try {
+            const epApi = `${API_URL}/detail/video?id=${id}&type=episode&${desktopParams}`;
+            const epRes = await axios.get(epApi, { headers: defaultHeaders, timeout: 5000 });
+            if (epRes.data?.stream) {
+              streamObj = epRes.data.stream;
+              videoHash = epRes.data.stream.videoHash || null;
+            }
+          } catch {}
+        }
       }
     } catch (e) {
       console.error("MX Stream resolution error:", e);
@@ -207,22 +289,22 @@ export const getStream = async function ({
   // 4. Direct videoHash CloudFront CDN Fallback
   // If API geoblocked the stream object, construct direct CloudFront CDN streams from the videoHash
   if (streamLinks.length === 0 && videoHash) {
-    addStream(
-      `https://d3sgzbosmwirao.cloudfront.net/video/${videoHash}/3/hls/h264_high.m3u8`,
-      "MX HLS 1080p",
-      "m3u8"
-    );
+    [3, 1, 2, 6].forEach((variant) => {
+      addStream(
+        `https://d3sgzbosmwirao.cloudfront.net/video/${videoHash}/${variant}/hls/h264_high.m3u8`,
+        `MX HLS 1080p (v${variant})`,
+        "m3u8"
+      );
+    });
     addStream(
       `https://d3sgzbosmwirao.cloudfront.net/video/${videoHash}/3/dash/h264_high.mpd`,
       "MX DASH 1080p",
       "dash"
     );
-    addStream(
-      `https://d3sgzbosmwirao.cloudfront.net/video/${videoHash}/1/hls/h264_high.m3u8`,
-      "MX HLS (Direct) 1080p",
-      "m3u8"
-    );
   }
 
-  return streamLinks;
+  // Prioritize HLS (m3u8) streams at the top for universal web playback
+  const hlsStreams = streamLinks.filter((s) => s.type === "m3u8");
+  const dashStreams = streamLinks.filter((s) => s.type !== "m3u8");
+  return [...hlsStreams, ...dashStreams];
 };

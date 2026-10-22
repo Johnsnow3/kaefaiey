@@ -70,8 +70,10 @@ async function fetchSeasonEpisodes(seasonId: string, axios: any): Promise<Episod
         const image = imgPath ? IMAGE_URL + imgPath : "";
 
         const streamData = JSON.stringify({
+          id: item.id,
           stream: item.stream,
-          videoHash: item.videoHash,
+          videoHash: item.stream?.videoHash || item.videoHash,
+          title,
         });
 
         episodes.push({
@@ -104,6 +106,23 @@ export const getEpisodes = async function ({
 
   if (isWebUrl) {
     if (url.includes("/tvshow/") || url.includes("/show/")) {
+      const hexMatch = url.match(/([a-f0-9]{32})/i);
+      const showId = hexMatch ? hexMatch[1] : null;
+
+      // 1. Direct REST API seasons query
+      if (showId) {
+        try {
+          const seasonsUrl = `${API_URL}/detail/tab/tvshowseasons?type=tvshow&id=${showId}&device-density=2&platform=com.mxplay.desktop&content-languages=hi,en&kids-mode-enabled=false`;
+          const sRes = await axios.get(seasonsUrl, { headers: defaultHeaders, timeout: 6000 });
+          const items = sRes.data?.items || [];
+          const season1 = items.find((s: any) => s.sequence === 1) || items[0];
+          if (season1?.id) {
+            return await fetchSeasonEpisodes(season1.id, axios);
+          }
+        } catch {}
+      }
+
+      // 2. HTML parsing fallback
       try {
         const pageRes = await axios.get(url, { headers: defaultHeaders });
         const rawHtml =

@@ -1145,7 +1145,11 @@ app.all("/api/proxy/stream", async (req, res) => {
       targetUrl.includes("officialmoviebox.com")
     ) {
       originReferer = "https://officialmoviebox.com/";
-    } else if (targetUrl.includes("mxplayer.in") || targetUrl.includes("cloudfront.net/video/")) {
+    } else if (
+      targetUrl.includes("mxplayer.in") ||
+      targetUrl.includes("cloudfront.net") ||
+      targetUrl.includes("mxplay.com")
+    ) {
       originReferer = "https://www.mxplayer.in/";
     } else if (targetUrl.includes("googlevideo.com") || targetUrl.includes("youtube.com")) {
       originReferer = "https://www.youtube.com/";
@@ -1301,11 +1305,25 @@ app.all("/api/proxy/stream", async (req, res) => {
       res.setHeader("Content-Disposition", "inline");
     }
 
-    // ─── Correct Obfuscated MIME Types (NetMirror TS chunks disguised as .woff2 / .js; MX Player .m4s / .mp4; MKV)
+    // ─── Correct Obfuscated MIME Types (NetMirror TS chunks disguised as .woff2 / .js; MX Player .m4s / .mp4 / audio / .vtt; MKV)
     const lowerUrl = targetUrl.toLowerCase();
     const currType = (streamRes.headers["content-type"] || "").toLowerCase();
 
     if (
+      lowerUrl.includes(".vtt") ||
+      lowerUrl.includes(".srt") ||
+      lowerUrl.includes("subtitle")
+    ) {
+      res.setHeader("Content-Type", "text/vtt; charset=utf-8");
+    } else if (
+      lowerUrl.includes("/audio") ||
+      lowerUrl.includes("audio_") ||
+      lowerUrl.includes(".m4a") ||
+      lowerUrl.includes(".aac") ||
+      currType.includes("audio/")
+    ) {
+      res.setHeader("Content-Type", "audio/mp4");
+    } else if (
       lowerUrl.includes(".woff2") ||
       lowerUrl.includes(".woff") ||
       (lowerUrl.includes(".ts") && !lowerUrl.includes("is=1")) ||

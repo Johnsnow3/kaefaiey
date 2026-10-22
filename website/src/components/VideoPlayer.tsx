@@ -140,8 +140,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const triedProxyRef = useRef(false);
   const triedDirectRef = useRef(false);
 
-  // Active Server Stream
-  const [selectedStreamIndex, setSelectedStreamIndex] = useState(0);
+  // Active Server Stream - Prioritize first HLS (m3u8) stream for maximum browser playback compatibility
+  const initialIndex = resolvedStreams.findIndex(
+    (s) => s.type === "m3u8" || s.link.includes(".m3u8")
+  );
+  const [selectedStreamIndex, setSelectedStreamIndex] = useState(
+    initialIndex >= 0 ? initialIndex : 0
+  );
   const activeStream = resolvedStreams[selectedStreamIndex] || resolvedStreams[0];
 
   // Playback & Controls State
