@@ -226,9 +226,9 @@ export const getStream = async function ({
     const userAgent =
       providerContext?.commonHeaders?.["User-Agent"] || defaultUserAgent;
     const streamHeaders = {
-      Referer: `${baseUrl}/`,
-      Origin: baseUrl,
-      "User-Agent": userAgent,
+      Referer: "https://videodownloader.site/",
+      Origin: "https://videodownloader.site",
+      "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36",
     };
 
     if (!playback.subjectId && playback.detailPath) {

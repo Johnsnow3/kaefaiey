@@ -557,8 +557,9 @@ app.get("/api/debug-proxy", async (req, res) => {
   }
 
   try {
-    const cmd = `curl -s -v --http2 -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" -H "Referer: https://officialmoviebox.com/" -H "Origin: https://officialmoviebox.com" -r 0-10 "${targetUrl}" 2>&1`;
-    results.curlVerbose = execSync(cmd, { timeout: 8000 }).toString("utf8").substring(0, 2000);
+    const token = await getOmniSaveToken();
+    const cmd = `curl -s -v --http2 -H "User-Agent: Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36" -H "Referer: https://videodownloader.site/" -H "Origin: https://videodownloader.site" -H "Authorization: Bearer ${token}" -H "x-site-domain: downloader" -H "x-source: downloader" -H "x-request-lang: en" -r 0-10 "${targetUrl}" 2>&1`;
+    results.curlVerbose = execSync(cmd, { timeout: 8000 }).toString("utf8").slice(-3000);
   } catch (e) {
     results.curlVerbose = "Error: " + e.message + (e.stdout ? "\n" + e.stdout.toString() : "");
   }
@@ -876,6 +877,55 @@ app.options("/api/proxy/subtitle", (req, res) => {
   res.sendStatus(204);
 });
 
+// ─── OmniSave (MovieBox / Aoneroom) Token Manager ─────────────────────────
+let cachedOmniToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMwMzI2MTE2OTcwNDQ0NzQ5NDQsImV4cCI6MTgwMTU3Nzg5NywiaWF0IjoxNzkzODAxNTk3fQ.AvUe_jDwbJj_aQeATBvp_GrNI3XwjrHttCloYMxGpAQ";
+let cachedOmniTokenExpires = 1801577897;
+
+async function getOmniSaveToken() {
+  const now = Math.floor(Date.now() / 1000);
+  if (cachedOmniToken && cachedOmniTokenExpires > now + 300) {
+    return cachedOmniToken;
+  }
+  try {
+    const saved = await kvStore.get("omnisave_auth_token");
+    if (saved && saved.token && saved.exp > now + 300) {
+      cachedOmniToken = saved.token;
+      cachedOmniTokenExpires = saved.exp;
+      return cachedOmniToken;
+    }
+  } catch {}
+
+  try {
+    const initRes = await axios({
+      method: "get",
+      url: "https://h5-api.aoneroom.com/wefeed-h5api-bff/country-code",
+      headers: {
+        Origin: "https://videodownloader.site",
+        Referer: "https://videodownloader.site/",
+        "x-site-domain": "downloader",
+        "x-source": "downloader",
+        "x-client-info": JSON.stringify({ timezone: "Asia/Calcutta" }),
+        "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36",
+      },
+      timeout: 8000,
+    });
+    const xUserHeader = initRes.headers["x-user"];
+    if (xUserHeader) {
+      const parsed = typeof xUserHeader === "string" ? JSON.parse(xUserHeader) : xUserHeader;
+      if (parsed.token) {
+        cachedOmniToken = parsed.token;
+        cachedOmniTokenExpires = parsed.exp || (now + 86400 * 30);
+        await kvStore.set("omnisave_auth_token", { token: cachedOmniToken, exp: cachedOmniTokenExpires });
+        return cachedOmniToken;
+      }
+    }
+  } catch (e) {
+    console.warn("[omnisave] Failed to auto-generate token:", e.message);
+  }
+
+  return cachedOmniToken;
+}
+
 function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
   const originReferer = reqHeaders["Referer"] || targetUrl;
   const args = [
@@ -892,6 +942,22 @@ function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req,
     "--max-redirs", "5",
   ];
 
+  if (reqHeaders["Authorization"]) {
+    args.push("-H", `Authorization: ${reqHeaders["Authorization"]}`);
+  }
+  if (reqHeaders["x-site-domain"]) {
+    args.push("-H", `x-site-domain: ${reqHeaders["x-site-domain"]}`);
+  }
+  if (reqHeaders["x-source"]) {
+    args.push("-H", `x-source: ${reqHeaders["x-source"]}`);
+  }
+  if (reqHeaders["x-request-lang"]) {
+    args.push("-H", `x-request-lang: ${reqHeaders["x-request-lang"]}`);
+  }
+  if (reqHeaders["Cookie"]) {
+    args.push("-H", `Cookie: ${reqHeaders["Cookie"]}`);
+  }
+
   if (method === "HEAD") {
     args.push("--head");
   } else if (req.headers && req.headers.range) {
@@ -904,12 +970,14 @@ function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req,
   let headerBuffer = Buffer.alloc(0);
   let headersParsed = false;
 
-  child.stdout.on("data", (chunk) => {
+  const onData = (chunk) => {
     if (!headersParsed) {
       headerBuffer = Buffer.concat([headerBuffer, chunk]);
       const headerEnd = headerBuffer.indexOf("\r\n\r\n");
       if (headerEnd !== -1) {
         headersParsed = true;
+        child.stdout.removeListener("data", onData);
+
         const headerText = headerBuffer.subarray(0, headerEnd).toString("utf8");
         const bodyRemainder = headerBuffer.subarray(headerEnd + 4);
 
@@ -966,7 +1034,9 @@ function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req,
         child.stdout.pipe(res);
       }
     }
-  });
+  };
+
+  child.stdout.on("data", onData);
 
   child.on("error", (err) => {
     if (!res.headersSent && !res.writableEnded) {
@@ -1007,6 +1077,19 @@ function proxyWithHttp2(targetUrl, reqHeaders, method, isDownload, filename, req
       "accept": "*/*",
       "accept-encoding": "identity",
     };
+
+    if (reqHeaders["Authorization"]) {
+      http2Headers["authorization"] = reqHeaders["Authorization"];
+    }
+    if (reqHeaders["x-site-domain"]) {
+      http2Headers["x-site-domain"] = reqHeaders["x-site-domain"];
+    }
+    if (reqHeaders["x-source"]) {
+      http2Headers["x-source"] = reqHeaders["x-source"];
+    }
+    if (reqHeaders["x-request-lang"]) {
+      http2Headers["x-request-lang"] = reqHeaders["x-request-lang"];
+    }
 
     if (reqHeaders["Range"]) {
       http2Headers["range"] = reqHeaders["Range"];
@@ -1144,17 +1227,21 @@ app.all("/api/proxy/stream", async (req, res) => {
     } catch {}
 
     // Special auto-referers for providers with strict CDN referer validation
-    if (
+    const isMovieBoxCdn =
       targetUrl.includes("hakunaymatata.com") ||
       targetUrl.includes("aoneroom.com") ||
       targetUrl.includes("officialmoviebox.com") ||
       targetUrl.includes("bcdnxw") ||
+      targetUrl.includes("bcdnw") ||
       targetUrl.includes("pbcdnw") ||
       targetUrl.includes("mbcdn") ||
       targetUrl.includes("moviebox") ||
-      String(originReferer).includes("officialmoviebox")
-    ) {
-      originReferer = "https://officialmoviebox.com/";
+      targetUrl.includes("videodownloader.site") ||
+      String(originReferer).includes("officialmoviebox") ||
+      String(originReferer).includes("videodownloader.site");
+
+    if (isMovieBoxCdn) {
+      originReferer = "https://videodownloader.site/";
     } else if (
       targetUrl.includes("mxplayer.in") ||
       targetUrl.includes("cloudfront.net") ||
@@ -1189,6 +1276,17 @@ app.all("/api/proxy/stream", async (req, res) => {
       Accept: "*/*",
       "Accept-Encoding": "identity",
     };
+
+    if (isMovieBoxCdn) {
+      const omniToken = await getOmniSaveToken();
+      reqHeaders["Authorization"] = `Bearer ${omniToken}`;
+      reqHeaders["Origin"] = "https://videodownloader.site";
+      reqHeaders["Referer"] = "https://videodownloader.site/";
+      reqHeaders["User-Agent"] = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36";
+      reqHeaders["x-site-domain"] = "downloader";
+      reqHeaders["x-source"] = "downloader";
+      reqHeaders["x-request-lang"] = "en";
+    }
 
     if (cookie) {
       reqHeaders["Cookie"] = String(cookie);
@@ -1280,9 +1378,10 @@ app.all("/api/proxy/stream", async (req, res) => {
         validateStatus: (status) => status >= 200 && status < 400,
       });
     } catch (axiosErr) {
-      // If server returned 426 Upgrade Required, 429 Rate Limit, or 403 Forbidden, automatically retry over curl or HTTP/2
+      // If server returned 426 Upgrade Required, 428 Precondition Required / Forbidden, 429 Rate Limit, or 403 Forbidden, automatically retry over curl or HTTP/2
       if (
         (axiosErr.response?.status === 426 ||
+          axiosErr.response?.status === 428 ||
           axiosErr.response?.status === 429 ||
           axiosErr.response?.status === 403 ||
           axiosErr.code === "ETIMEDOUT") &&
@@ -1435,10 +1534,14 @@ app.get("/api/proxy/subtitle", async (req, res) => {
     } else if (
       String(targetUrl).includes("aoneroom.com") ||
       String(targetUrl).includes("officialmoviebox.com") ||
-      String(originReferer).includes("officialmoviebox.com")
+      String(targetUrl).includes("hakunaymatata.com") ||
+      String(targetUrl).includes("cacdn") ||
+      String(originReferer).includes("officialmoviebox.com") ||
+      String(originReferer).includes("videodownloader.site")
     ) {
       subHeaders["Referer"] = "https://officialmoviebox.com/";
       subHeaders["Origin"] = "https://officialmoviebox.com";
+      subHeaders["User-Agent"] = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36";
     }
 
     const subRes = await axios.get(String(targetUrl), {
