@@ -141,14 +141,31 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const triedDirectRef = useRef(false);
   const savedTimeRef = useRef<number>(0);
 
-  // Active Server Stream - Prioritize first HLS (m3u8) stream for maximum browser playback compatibility
-  const initialIndex = resolvedStreams.findIndex(
-    (s) => s.type === "m3u8" || s.link.includes(".m3u8")
-  );
-  const [selectedStreamIndex, setSelectedStreamIndex] = useState(
-    initialIndex >= 0 ? initialIndex : 0
-  );
+  // Active Server Stream - Prioritize first HLS (m3u8), or highest resolution progressive stream (e.g. 1080p/720p for MovieBox)
+  const initialIndex = React.useMemo(() => {
+    const hlsIndex = resolvedStreams.findIndex(
+      (s) => s.type === "m3u8" || s.link.includes(".m3u8")
+    );
+    if (hlsIndex >= 0) return hlsIndex;
+
+    let bestIdx = 0;
+    let maxQuality = 0;
+    resolvedStreams.forEach((s, idx) => {
+      const qNum = parseInt(s.quality || "", 10) || 0;
+      if (qNum > maxQuality) {
+        maxQuality = qNum;
+        bestIdx = idx;
+      }
+    });
+    return bestIdx;
+  }, [resolvedStreams]);
+
+  const [selectedStreamIndex, setSelectedStreamIndex] = useState(initialIndex);
   const activeStream = resolvedStreams[selectedStreamIndex] || resolvedStreams[0];
+
+  useEffect(() => {
+    setSelectedStreamIndex(initialIndex);
+  }, [initialIndex]);
 
   // Playback & Controls State
   const [isPlaying, setIsPlaying] = useState(false);
@@ -177,6 +194,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // Quality levels from HLS
   const [qualityLevels, setQualityLevels] = useState<{ id: number; height: number; bitrate?: number; label: string }[]>([]);
   const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1); // -1 is Auto
+
+  // Progressive MP4 streams resolution levels (for providers like MovieBox with discrete 1080p, 720p, 480p, 360p streams)
+  const streamQualityLevels = React.useMemo(() => {
+    if (qualityLevels.length > 0) return [];
+    return resolvedStreams.map((s, idx) => {
+      let q = s.quality || "";
+      if (!q) {
+        const match = (s.server || "").match(/(2160|1080|720|480|360)p?/i);
+        if (match) q = match[1];
+      }
+      const height = parseInt(q, 10) || 720;
+      const label = q ? (q.endsWith("p") ? q : `${q}p`) : (s.server || `Stream #${idx + 1}`);
+      return {
+        id: idx,
+        streamIndex: idx,
+        label,
+        height,
+      };
+    });
+  }, [qualityLevels, resolvedStreams]);
 
   // Modal Sheets: "none" | "quality" | "audio" | "subs" | "speed"
   const [activeSheet, setActiveSheet] = useState<"none" | "quality" | "audio" | "subs" | "speed">("none");
@@ -315,7 +352,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const isMkv = lowerUrl.includes(".mkv") || activeStream.type === "mkv";
     const hasCustomReferer = Boolean(activeStream.headers?.Referer);
 
+    const isMovieBoxStream =
+      lowerUrl.includes("hakunaymatata.com") ||
+      lowerUrl.includes("officialmoviebox.com") ||
+      lowerUrl.includes("aoneroom.com") ||
+      lowerUrl.includes("bcdnxw") ||
+      lowerUrl.includes("pbcdnw") ||
+      lowerUrl.includes("mbcdn") ||
+      Boolean(activeStream.headers?.Referer?.includes("officialmoviebox.com"));
+
     const needsProxy =
+      isMovieBoxStream ||
       hasCustomReferer ||
       Boolean(activeStream.headers?.Cookie) ||
       isMkv ||
@@ -521,7 +568,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           triedProxyRef.current = true;
           video.src = getProxyStreamUrl(streamUrl, activeStream.headers?.Referer, activeStream.headers?.Cookie);
           video.play().catch(() => {});
-        } else if (!triedDirectRef.current && initialSrc.includes("/api/proxy/")) {
+        } else if (!triedDirectRef.current && initialSrc.includes("/api/proxy/") && !isMovieBoxStream && !hasCustomReferer) {
+          // Never fallback to direct unproxied URL for MovieBox (which strictly requires proxying)
           triedDirectRef.current = true;
           video.src = streamUrl;
           video.play().catch(() => {});
@@ -529,10 +577,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           setPlaybackNotice(
             isMkv
               ? "MKV Stream: Browser cannot decode this Matroska codec natively. Use 1-Click Launch below for instant playback in VLC / MX Player or direct download."
-              : "Video stream cannot be decoded directly by the browser. Launch with 1-click in VLC / MX Player or use Direct Download."
+              : "Video stream connection interrupted. Launch with 1-click in VLC / MX Player or use Direct Download."
           );
         }
       };
+
+      video.onloadedmetadata = () => {
+        if (savedTimeRef.current > 0) {
+          try {
+            video.currentTime = savedTimeRef.current;
+          } catch {}
+          savedTimeRef.current = 0;
+        }
+        setIsBuffering(false);
+      };
+
       video.play().catch(() => {});
       setIsPlaying(true);
     }
@@ -544,7 +603,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       }
       video.onerror = null;
     };
-  }, [activeStream?.link]);
+  }, [activeStream?.link, selectedStreamIndex]);
 
   // Handle Subtitle Switching across HLS and HTML5 TextTracks
   useEffect(() => {
@@ -656,6 +715,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setSelectedQualityIndex(levelIndex);
     if (hlsRef.current) {
       hlsRef.current.currentLevel = levelIndex;
+    } else if (streamQualityLevels.length > 0 && levelIndex >= 0) {
+      const targetOpt = streamQualityLevels.find((l) => l.id === levelIndex);
+      if (targetOpt && targetOpt.streamIndex !== selectedStreamIndex) {
+        if (videoRef.current) {
+          savedTimeRef.current = videoRef.current.currentTime || currentTime;
+        }
+        setSelectedStreamIndex(targetOpt.streamIndex);
+      }
     }
   };
 
@@ -775,6 +842,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       } else if (serverLower.includes("kannada")) {
         lang = "kn";
         label = "Kannada";
+      } else {
+        // Strip trailing resolutions like 1080, 720, 480, 360 so resolution variations don't appear as distinct audio tracks
+        const cleaned = (s.server || "")
+          .replace(/\b(2160|1080|720|480|360)p?\b/gi, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        label = cleaned || "Original Audio";
       }
 
       if (!seen.has(label)) {
@@ -822,9 +896,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     : "None";
 
   // Active quality label for bottom bar
-  const activeQualityDisplay = selectedQualityIndex === -1
-    ? (qualityLevels[0]?.label || "1080p")
-    : (qualityLevels[selectedQualityIndex]?.label || "1080p");
+  const activeQualityDisplay = React.useMemo(() => {
+    if (qualityLevels.length > 0) {
+      return selectedQualityIndex === -1
+        ? (qualityLevels[0]?.label || "Auto")
+        : (qualityLevels[selectedQualityIndex]?.label || "1080p");
+    }
+    if (streamQualityLevels.length > 0) {
+      const current = streamQualityLevels.find((l) => l.streamIndex === selectedStreamIndex);
+      return current?.label || (activeStream?.quality ? `${activeStream.quality}p` : "HD");
+    }
+    return activeStream?.quality ? `${activeStream.quality}p` : "1080p";
+  }, [qualityLevels, selectedQualityIndex, streamQualityLevels, selectedStreamIndex, activeStream]);
 
   return (
     <div
@@ -1356,50 +1439,88 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   Resolution
                 </h4>
                 <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
-                  {/* Auto option */}
-                  <div
-                    onClick={() => {
-                      handleQualityChange(-1);
-                      setActiveSheet("none");
-                    }}
-                    className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                      selectedQualityIndex === -1
-                        ? "bg-zinc-800/90 border-white text-white"
-                        : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
-                    }`}
-                  >
-                    <div>
-                      <span className="block text-xs font-bold text-white">Auto (Adaptive)</span>
-                      <span className="text-[10px] text-zinc-400">Best quality for current network</span>
-                    </div>
-                    {selectedQualityIndex === -1 && <CheckCircle2 className="w-5 h-5 text-white" />}
-                  </div>
-
-                  {qualityLevels.map((lvl) => {
-                    const isSelected = selectedQualityIndex === lvl.id;
-                    return (
+                  {qualityLevels.length > 0 ? (
+                    <>
+                      {/* Auto option */}
                       <div
-                        key={lvl.id}
                         onClick={() => {
-                          handleQualityChange(lvl.id);
+                          handleQualityChange(-1);
                           setActiveSheet("none");
                         }}
                         className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
-                          isSelected
+                          selectedQualityIndex === -1
                             ? "bg-zinc-800/90 border-white text-white"
                             : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
                         }`}
                       >
                         <div>
-                          <span className="block text-xs font-bold text-white">{lvl.label}</span>
-                          <span className="text-[10px] text-zinc-400 font-mono">
-                            {lvl.bitrate ? `${Math.round(lvl.bitrate / 1000)} kbps` : "High Definition"}
-                          </span>
+                          <span className="block text-xs font-bold text-white">Auto (Adaptive)</span>
+                          <span className="text-[10px] text-zinc-400">Best quality for current network</span>
                         </div>
-                        {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
+                        {selectedQualityIndex === -1 && <CheckCircle2 className="w-5 h-5 text-white" />}
                       </div>
-                    );
-                  })}
+
+                      {qualityLevels.map((lvl) => {
+                        const isSelected = selectedQualityIndex === lvl.id;
+                        return (
+                          <div
+                            key={lvl.id}
+                            onClick={() => {
+                              handleQualityChange(lvl.id);
+                              setActiveSheet("none");
+                            }}
+                            className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                              isSelected
+                                ? "bg-zinc-800/90 border-white text-white"
+                                : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+                            }`}
+                          >
+                            <div>
+                              <span className="block text-xs font-bold text-white">{lvl.label}</span>
+                              <span className="text-[10px] text-zinc-400 font-mono">
+                                {lvl.bitrate ? `${Math.round(lvl.bitrate / 1000)} kbps` : "High Definition"}
+                              </span>
+                            </div>
+                            {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
+                          </div>
+                        );
+                      })}
+                    </>
+                  ) : streamQualityLevels.length > 0 ? (
+                    streamQualityLevels.map((lvl) => {
+                      const isSelected = selectedStreamIndex === lvl.streamIndex;
+                      return (
+                        <div
+                          key={lvl.id}
+                          onClick={() => {
+                            handleQualityChange(lvl.id);
+                            setActiveSheet("none");
+                          }}
+                          className={`p-3 rounded-2xl border cursor-pointer flex items-center justify-between transition-all ${
+                            isSelected
+                              ? "bg-zinc-800/90 border-white text-white"
+                              : "bg-[#1c1c20] border-zinc-800/80 text-zinc-400 hover:border-zinc-700"
+                          }`}
+                        >
+                          <div>
+                            <span className="block text-xs font-bold text-white">{lvl.label}</span>
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                              Direct Stream ({lvl.height}p)
+                            </span>
+                          </div>
+                          {isSelected && <CheckCircle2 className="w-5 h-5 text-white" />}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="p-3 rounded-2xl bg-zinc-800 border border-white text-white flex items-center justify-between">
+                      <div>
+                        <span className="block text-xs font-bold text-white">Default Quality</span>
+                        <span className="text-[10px] text-zinc-400 font-mono">Standard Stream</span>
+                      </div>
+                      <CheckCircle2 className="w-5 h-5 text-white" />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

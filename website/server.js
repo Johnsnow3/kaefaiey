@@ -1142,7 +1142,12 @@ app.all("/api/proxy/stream", async (req, res) => {
     if (
       targetUrl.includes("hakunaymatata.com") ||
       targetUrl.includes("aoneroom.com") ||
-      targetUrl.includes("officialmoviebox.com")
+      targetUrl.includes("officialmoviebox.com") ||
+      targetUrl.includes("bcdnxw") ||
+      targetUrl.includes("pbcdnw") ||
+      targetUrl.includes("mbcdn") ||
+      targetUrl.includes("moviebox") ||
+      String(originReferer).includes("officialmoviebox")
     ) {
       originReferer = "https://officialmoviebox.com/";
     } else if (
@@ -1270,8 +1275,15 @@ app.all("/api/proxy/stream", async (req, res) => {
         validateStatus: (status) => status >= 200 && status < 400,
       });
     } catch (axiosErr) {
-      // If server returned 426 Upgrade Required, automatically retry over curl or HTTP/2
-      if (axiosErr.response?.status === 426 && !isM3u8Url && !res.headersSent) {
+      // If server returned 426 Upgrade Required, 429 Rate Limit, or 403 Forbidden, automatically retry over curl or HTTP/2
+      if (
+        (axiosErr.response?.status === 426 ||
+          axiosErr.response?.status === 429 ||
+          axiosErr.response?.status === 403 ||
+          axiosErr.code === "ETIMEDOUT") &&
+        !isM3u8Url &&
+        !res.headersSent
+      ) {
         if (hasCurl) {
           return proxyWithCurl(targetUrl, reqHeaders, req.method, isDownload, filename, req, res);
         }
@@ -1359,6 +1371,15 @@ app.all("/api/proxy/stream", async (req, res) => {
       try { streamRes.data.destroy(); } catch {}
     });
 
+    streamRes.data.on("error", (err) => {
+      try { streamRes.data.destroy(); } catch {}
+      if (!res.headersSent) {
+        res.status(502).end();
+      } else {
+        try { res.end(); } catch {}
+      }
+    });
+
     streamRes.data.pipe(res);
   } catch (err) {
     // Silently ignore client aborts / normal player seek closes so Railway logs aren't spammed
@@ -1406,6 +1427,13 @@ app.get("/api/proxy/subtitle", async (req, res) => {
     ) {
       subHeaders["Referer"] = "https://megaplay.buzz/";
       subHeaders["Origin"] = "https://megaplay.buzz";
+    } else if (
+      String(targetUrl).includes("aoneroom.com") ||
+      String(targetUrl).includes("officialmoviebox.com") ||
+      String(originReferer).includes("officialmoviebox.com")
+    ) {
+      subHeaders["Referer"] = "https://officialmoviebox.com/";
+      subHeaders["Origin"] = "https://officialmoviebox.com";
     }
 
     const subRes = await axios.get(String(targetUrl), {
