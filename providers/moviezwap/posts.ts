@@ -16,7 +16,13 @@ export const getPosts = async function ({
 }): Promise<Post[]> {
   const { cheerio } = providerContext;
   const baseUrl = await getBaseUrl("moviezwap");
-  const url = `${baseUrl}${filter}`;
+  let filterPath = filter;
+  if (page > 1) {
+    filterPath = filter.replace(/\.html$/, `/${page}.html`);
+  }
+  const cleanBase = baseUrl.replace(/\/+$/, "");
+  const cleanFilter = filterPath.startsWith("/") ? filterPath : `/${filterPath}`;
+  const url = `${cleanBase}${cleanFilter}`;
   return posts({ url, signal, cheerio, operation: "posts" });
 };
 
@@ -34,7 +40,8 @@ export const getSearchPosts = async function ({
 }): Promise<Post[]> {
   const { cheerio } = providerContext;
   const baseUrl = await getBaseUrl("moviezwap");
-  const url = `${baseUrl}/search.php?q=${encodeURIComponent(searchQuery)}`;
+  const cleanBase = baseUrl.replace(/\/+$/, "");
+  const url = `${cleanBase}/search.php?q=${encodeURIComponent(searchQuery)}`;
   return posts({ url, signal, cheerio, operation: "search posts" });
 };
 
@@ -60,12 +67,11 @@ async function posts({
     $('a[href^="/movie/"]').each((i, el) => {
       const title = $(el).text().trim();
       const link = $(el).attr("href");
-      const image = "";
       if (title && link) {
         catalog.push({
           title: title,
           link: link,
-          image: image,
+          image: "",
         });
       }
     });

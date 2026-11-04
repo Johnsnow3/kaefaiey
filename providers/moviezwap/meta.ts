@@ -1,3 +1,4 @@
+import { formatSeasonLinks } from "../formatSeasonLinks";
 import { Info, Link, ProviderContext } from "../types";
 import { getBaseUrl } from "../getBaseUrl";
 import { throwProviderError } from "../providerErrors";
@@ -10,17 +11,20 @@ export const getMeta = async function ({
   providerContext: ProviderContext;
 }): Promise<Info> {
   try {
-    const { axios, cheerio } = providerContext;
+    const { cheerio } = providerContext;
     const baseUrl = await getBaseUrl("moviezwap");
     const url = new URL(link, `${baseUrl}/`).href;
-    const res = await axios.get(url);
-    const data = res.data;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const data = await res.text();
     const $ = cheerio.load(data);
 
-    // 1. Poster image find  image with width 260
+    // 1. Poster image
     let image = $('img[width="260"]').attr("src") || "";
     if (image && !image.startsWith("http")) {
-      image = baseUrl + image;
+      image = new URL(image, `${baseUrl}/`).href;
     }
 
     const tags = $("font[color='steelblue']")
@@ -31,10 +35,18 @@ export const getMeta = async function ({
     // 2. Title
     const title = $("title").text().replace(" - MoviezWap", "").trim() || "";
 
-    // 3. Info table
+    // 3. Category & Media Type
+    const categoryText = $("div.movie:contains('Category')").text() || "";
+    const isSeries =
+      categoryText.toLowerCase().includes("series") ||
+      title.toLowerCase().includes("season") ||
+      title.toLowerCase().includes("episode") ||
+      title.toLowerCase().includes("eps");
+    const type = isSeries ? "series" : "movie";
+
+    // 4. Info table
     let synopsis = "";
     let imdbId = "";
-    let type = "movie";
     let infoRows: string[] = [];
     $("td:contains('Movie Information')")
       .parent()
@@ -50,38 +62,37 @@ export const getMeta = async function ({
         }
       });
     if (!synopsis) {
-      // fallback: try to find a <p> with plot
       synopsis = $("p:contains('plot')").text().trim();
     }
 
-    // 4. Download links (multiple qualities)
+    // 5. Download links (qualities)
     const links: Link[] = [];
+    const seenFiles = new Set<string>();
+
     $('a[href*="download.php?file="], a[href*="dwload.php?file="]').each(
       (i, el) => {
-        const downloadPage =
-          $(el).attr("href")?.replace("dwload.php", "download.php") || "";
-        const text = $(el).text().trim();
-        if (downloadPage && /\d+p/i.test(text)) {
-          // Only add links with quality in text
-          links.push({
-            title: text,
-            directLinks: [{ title: "Movie", link: baseUrl + downloadPage }],
-          });
-        }
-      },
-    );
+        const rawHref = $(el).attr("href") || "";
+        const fileMatch = rawHref.match(/file=(\d+)/);
+        if (!fileMatch) return;
+        const fileId = fileMatch[1];
+        if (seenFiles.has(fileId)) return;
+        seenFiles.add(fileId);
 
-    $("img[src*='/images/play.png']").each((i, el) => {
-      const downloadPage = $(el).siblings("a").attr("href");
-      const text = $(el).siblings("a").text().trim();
-      console.log("Found link:🔥🔥", text, downloadPage);
-      if (downloadPage && text) {
+        const downloadPage = new URL(`/download.php?file=${fileId}`, `${baseUrl}/`).href;
+        const text = $(el).text().trim() || `Quality ${links.length + 1}`;
+
         links.push({
           title: text,
-          episodesLink: baseUrl + downloadPage,
+          episodesLink: downloadPage,
+          directLinks: [
+            {
+              title: "Play",
+              link: downloadPage,
+            },
+          ],
         });
-      }
-    });
+      },
+    );
 
     return {
       title,
@@ -90,9 +101,8 @@ export const getMeta = async function ({
       imdbId,
       tags,
       type,
-      linkList: links,
+      linkList: formatSeasonLinks(links),
       webUrl: url,
-      //info: infoRows.join("\n"),
     };
   } catch (err) {
     throwProviderError("MoviezWap", "metadata", err);

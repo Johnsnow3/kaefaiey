@@ -9,31 +9,52 @@ export const getEpisodes = async function ({
   url: string;
   providerContext: ProviderContext;
 }): Promise<EpisodeLink[]> {
-  const { axios, cheerio } = providerContext;
+  const { cheerio } = providerContext;
   try {
-    const res = await axios.get(url);
     const baseUrl = await getBaseUrl("moviezwap");
-    const html = res.data;
+    const fullUrl = url.startsWith("http") ? url : new URL(url, `${baseUrl}/`).href;
+
+    // If already a download or dwload link
+    if (fullUrl.includes("download.php") || fullUrl.includes("dwload.php")) {
+      const targetUrl = fullUrl.replace("dwload.php", "download.php");
+      return [
+        {
+          title: "Play",
+          link: targetUrl,
+        },
+      ];
+    }
+
+    // If it is a movie detail page
+    const res = await fetch(fullUrl);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    }
+    const html = await res.text();
     const $ = cheerio.load(html);
 
     const episodeLinks: EpisodeLink[] = [];
+    const seenFiles = new Set<string>();
 
     $('a[href*="download.php?file="], a[href*="dwload.php?file="]').each(
       (i, el) => {
-        const downloadPage =
-          $(el).attr("href")?.replace("dwload.php", "download.php") || "";
-        let text = $(el).text().trim();
+        const rawHref = $(el).attr("href") || "";
+        const fileMatch = rawHref.match(/file=(\d+)/);
+        if (!fileMatch) return;
+        const fileId = fileMatch[1];
+        if (seenFiles.has(fileId)) return;
+        seenFiles.add(fileId);
+
+        const downloadPage = new URL(`/download.php?file=${fileId}`, `${baseUrl}/`).href;
+        let text = $(el).text().trim() || `Play ${episodeLinks.length + 1}`;
         if (text.includes("Download page")) {
-          // Remove "Download" from the text
           text = "Play";
         }
-        if (downloadPage && text) {
-          // Only add links with quality in text
-          episodeLinks.push({
-            title: text,
-            link: baseUrl + downloadPage,
-          });
-        }
+
+        episodeLinks.push({
+          title: text,
+          link: downloadPage,
+        });
       },
     );
 

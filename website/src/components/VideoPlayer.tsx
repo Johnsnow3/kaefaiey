@@ -1603,7 +1603,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               Play in MX Player
             </a>
             <a
-              href={getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer, activeStream?.headers?.Cookie, true, `${title || "video"}.mp4`)}
+              href={needsProxy ? getProxyStreamUrl(streamUrl, activeStream?.headers?.Referer, activeStream?.headers?.Cookie, true, `${title || "video"}.mp4`) : streamUrl}
               download={title || "video.mp4"}
               target="_blank"
               rel="noreferrer"

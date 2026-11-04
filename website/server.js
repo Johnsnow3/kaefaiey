@@ -1219,7 +1219,13 @@ app.all("/api/proxy/stream", async (req, res) => {
   const filename = req.query.filename || "video.mp4";
 
   try {
-    const targetUrl = String(url);
+    const targetUrl = encodeURI(decodeURI(String(url)));
+
+    // MoviezWap 10G CDN links are bound to the client IP via nginx secure_link.
+    // If proxied through the server, redirect directly to the CDN so the user's IP connects directly.
+    if (targetUrl.includes("moviezzwaphd.xyz")) {
+      return res.redirect(targetUrl);
+    }
     let originReferer = referer ? String(referer) : "";
     try {
       const parsed = new URL(targetUrl);
