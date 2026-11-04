@@ -3,6 +3,10 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
+const dns = require("dns");
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch {}
 const axios = require("axios");
 const cheerio = require("cheerio");
 const http2 = require("http2");
@@ -875,6 +879,7 @@ app.options("/api/proxy/subtitle", (req, res) => {
 function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
   const originReferer = reqHeaders["Referer"] || targetUrl;
   const args = [
+    "-4",
     "-s",
     "-i",
     "--no-buffer",
@@ -1537,11 +1542,43 @@ app.get("/api/:provider/stream", async (req, res) => {
         ? streams.map(cleanStream)
         : streams;
 
+    // Automatically wrap MovieBox and other referer-protected CDN streams with our proxy URL so ANY player or client can stream without 429
+    const host = req.get("host") || "localhost:3000";
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "http";
+    const serverBaseUrl = `${protocol}://${host}`;
+
+    const finalStreams = Array.isArray(cleanedStreams)
+      ? cleanedStreams.map((s) => {
+          const lowerLink = (s.link || "").toLowerCase();
+          const isMovieBox =
+            req.params.provider === "movieBox" ||
+            req.params.provider === "movieBoxWeb" ||
+            lowerLink.includes("hakunaymatata.com") ||
+            lowerLink.includes("officialmoviebox.com") ||
+            lowerLink.includes("aoneroom.com") ||
+            lowerLink.includes("bcdnxw") ||
+            lowerLink.includes("pbcdnw") ||
+            lowerLink.includes("mbcdn");
+
+          if (isMovieBox && s.link && !s.link.includes("/api/proxy/stream")) {
+            const refererParam = encodeURIComponent(s.headers?.Referer || "https://officialmoviebox.com/");
+            const proxiedUrl = `${serverBaseUrl}/api/proxy/stream?url=${encodeURIComponent(s.link)}&referer=${refererParam}`;
+            return {
+              ...s,
+              rawLink: s.link,
+              link: proxiedUrl,
+              proxyUrl: proxiedUrl,
+            };
+          }
+          return s;
+        })
+      : cleanedStreams;
+
     res.json({
       provider: req.params.provider,
       type: String(type),
-      total: Array.isArray(cleanedStreams) ? cleanedStreams.length : 0,
-      streams: cleanedStreams || [],
+      total: Array.isArray(finalStreams) ? finalStreams.length : 0,
+      streams: finalStreams || [],
     });
   } catch (err) {
     if (req.params.provider === "kartoons") {

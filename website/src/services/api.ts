@@ -218,6 +218,12 @@ export function getProxyStreamUrl(
   isDownload?: boolean,
   filename?: string
 ): string {
+  if (streamUrl && streamUrl.includes("/api/proxy/stream")) {
+    if (isDownload && !streamUrl.includes("download=1")) {
+      return `${streamUrl}&download=1${filename ? `&filename=${encodeURIComponent(filename)}` : ""}`;
+    }
+    return streamUrl;
+  }
   const params = new URLSearchParams();
   params.set("url", streamUrl);
   if (referer) params.set("referer", referer);
