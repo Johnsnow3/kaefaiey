@@ -877,53 +877,249 @@ app.options("/api/proxy/subtitle", (req, res) => {
   res.sendStatus(204);
 });
 
-// ─── OmniSave (MovieBox / Aoneroom) Token Manager ─────────────────────────
-let cachedOmniToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjMwMzI2MTE2OTcwNDQ0NzQ5NDQsImV4cCI6MTgwMTU3Nzg5NywiaWF0IjoxNzkzODAxNTk3fQ.AvUe_jDwbJj_aQeATBvp_GrNI3XwjrHttCloYMxGpAQ";
-let cachedOmniTokenExpires = 1801577897;
+// ─── MovieBox (Omegatech / Aoneroom) Token & Proxy Manager ───────────────
+const MOVIEBOX_DOMAIN = process.env.MOVIEBOX_DOMAIN || "stream.omegatech.app";
+const MOVIEBOX_OMEGA_API = process.env.MOVIEBOX_OMEGA_API || "https://omegatech-api.dixonomega.tech/api/movie/MovieBox-pro";
+const MOVIEBOX_BASE = "https://h5-api.aoneroom.com";
+const MOVIEBOX_ORIGIN = "https://videodownloader.site";
+const MOVIEBOX_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
 
-async function getOmniSaveToken() {
-  const now = Math.floor(Date.now() / 1000);
-  if (cachedOmniToken && cachedOmniTokenExpires > now + 300) {
-    return cachedOmniToken;
+let movieboxTokenCache = {
+  token: null,
+  clientToken: null,
+  cookie: null,
+  expiresAt: null,
+};
+
+async function getMovieBoxTokenAndCookie() {
+  if (movieboxTokenCache.token && movieboxTokenCache.expiresAt && Date.now() < movieboxTokenCache.expiresAt - 300000) {
+    return movieboxTokenCache;
   }
-  try {
-    const saved = await kvStore.get("omnisave_auth_token");
-    if (saved && saved.token && saved.exp > now + 300) {
-      cachedOmniToken = saved.token;
-      cachedOmniTokenExpires = saved.exp;
-      return cachedOmniToken;
-    }
-  } catch {}
+
+  const clientToken = `${Math.floor(Date.now() / 1000)},${crypto.randomBytes(16).toString("hex")}`;
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": MOVIEBOX_UA,
+    "x-client-info": JSON.stringify({ timezone: "Africa/Conakry" }),
+    "x-client-token": clientToken,
+    "x-request-lang": "en",
+    "x-site-domain": "",
+    Origin: MOVIEBOX_ORIGIN,
+    Referer: `${MOVIEBOX_ORIGIN}/`,
+    "sec-ch-ua": '"Chromium";v="139", "Not;A=Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Android"',
+    "sec-fetch-site": "cross-site",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    "x-source": "downloader",
+  };
 
   try {
-    const initRes = await axios({
-      method: "get",
-      url: "https://h5-api.aoneroom.com/wefeed-h5api-bff/country-code",
-      headers: {
-        Origin: "https://videodownloader.site",
-        Referer: "https://videodownloader.site/",
-        "x-site-domain": "downloader",
-        "x-source": "downloader",
-        "x-client-info": JSON.stringify({ timezone: "Asia/Calcutta" }),
-        "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36",
-      },
-      timeout: 8000,
-    });
-    const xUserHeader = initRes.headers["x-user"];
-    if (xUserHeader) {
-      const parsed = typeof xUserHeader === "string" ? JSON.parse(xUserHeader) : xUserHeader;
-      if (parsed.token) {
-        cachedOmniToken = parsed.token;
-        cachedOmniTokenExpires = parsed.exp || (now + 86400 * 30);
-        await kvStore.set("omnisave_auth_token", { token: cachedOmniToken, exp: cachedOmniTokenExpires });
-        return cachedOmniToken;
+    const warmRes = await axios.post(
+      `${MOVIEBOX_BASE}/wefeed-h5api-bff/subject/search-suggest`,
+      { keyword: "test", page: 1, perPage: 1, subjectType: 0 },
+      { headers, timeout: 10000 }
+    );
+
+    let token = null;
+    let cookie = null;
+
+    const authHeader = warmRes.headers["authorization"];
+    if (authHeader) token = authHeader.replace("Bearer ", "");
+
+    const setCookie = warmRes.headers["set-cookie"];
+    if (setCookie) {
+      cookie = Array.isArray(setCookie) ? setCookie.join("; ") : setCookie;
+    }
+
+    if (!token) {
+      const xUser = warmRes.headers["x-user"];
+      if (xUser) {
+        try {
+          const userData = typeof xUser === "string" ? JSON.parse(xUser) : xUser;
+          if (userData.token) token = userData.token;
+        } catch (e) {}
       }
     }
-  } catch (e) {
-    console.warn("[omnisave] Failed to auto-generate token:", e.message);
+
+    if (token) {
+      movieboxTokenCache = {
+        token,
+        clientToken,
+        cookie: cookie || `token=${token}`,
+        expiresAt: Date.now() + 3600000,
+      };
+      return movieboxTokenCache;
+    }
+  } catch (e) {}
+
+  // Fallback self-signed JWT
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64");
+  const payload = Buffer.from(
+    JSON.stringify({
+      uid: String(Date.now()).slice(0, 13),
+      atp: 3,
+      exp: Math.floor(Date.now() / 1000) + 7776000,
+      iat: Math.floor(Date.now() / 1000),
+    })
+  ).toString("base64");
+  const signature = crypto.createHash("sha256").update(`${header}.${payload}`).digest("base64");
+  const selfToken = `${header}.${payload}.${signature}`;
+  movieboxTokenCache = {
+    token: selfToken,
+    clientToken,
+    cookie: `token=${selfToken}`,
+    expiresAt: Date.now() + 3600000,
+  };
+  return movieboxTokenCache;
+}
+
+async function getOmniSaveToken() {
+  const tokenData = await getMovieBoxTokenAndCookie();
+  return tokenData.token;
+}
+
+async function getMovieBoxVideoUrl(subjectId, detailPath, se = 0, ep = 0, quality = null) {
+  try {
+    const apiUrl = `${MOVIEBOX_OMEGA_API}?action=download&path=${encodeURIComponent(detailPath)}&subjectId=${encodeURIComponent(subjectId)}&detailPath=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
+    const response = await axios.get(apiUrl, { timeout: 10000 });
+    const data = response.data;
+
+    if (data && data.success && data.bestQuality) {
+      let videoUrl = data.bestQuality;
+      if (quality && quality !== "best") {
+        const stream = data.streams?.find((s) => s.quality === quality || `${s.resolution}p` === quality);
+        if (stream) videoUrl = stream.originalUrl;
+      }
+      return videoUrl;
+    }
+  } catch (e) {}
+
+  // Fallback to aoneroom download API
+  const tokenData = await getMovieBoxTokenAndCookie();
+  const response = await axios.get(`${MOVIEBOX_BASE}/wefeed-h5api-bff/subject/download`, {
+    params: { subjectId, se, ep, detailPath },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": MOVIEBOX_UA,
+      "x-client-info": JSON.stringify({ timezone: "Africa/Conakry" }),
+      "x-client-token": tokenData.clientToken,
+      "x-request-lang": "en",
+      "x-site-domain": "",
+      Authorization: `Bearer ${tokenData.token}`,
+      Cookie: tokenData.cookie,
+      Origin: MOVIEBOX_ORIGIN,
+      Referer: `${MOVIEBOX_ORIGIN}/`,
+      "x-source": "downloader",
+    },
+    timeout: 15000,
+  });
+
+  const data = response.data?.data || {};
+  const streams = data.streams || data.downloads || [];
+  const sorted = [...streams].sort(
+    (a, b) => (Number(b.resolutions || b.resolution) || 0) - (Number(a.resolutions || a.resolution) || 0)
+  );
+
+  let selected = sorted[0];
+  if (quality && quality !== "best") {
+    const match = sorted.find((s) => s.quality === quality || `${s.resolution}p` === quality);
+    if (match) selected = match;
   }
 
-  return cachedOmniToken;
+  if (!selected?.url) {
+    throw new Error("No video URL found");
+  }
+
+  return selected.url;
+}
+
+async function streamMovieBoxVideo(videoUrl, req, res, filename = null) {
+  try {
+    const tokenData = await getMovieBoxTokenAndCookie();
+    const rangeHeader = (req && req.headers && req.headers.range) || "bytes=0-";
+
+    const headers = {
+      "User-Agent": MOVIEBOX_UA,
+      Accept: "*/*",
+      "Accept-Encoding": "identity;q=1, *;q=0",
+      "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+      Origin: "https://movieboxonline.net",
+      Referer: "https://movieboxonline.net/",
+      "Sec-Ch-Ua": '"Chromium";v="139", "Not;A=Brand";v="99"',
+      "Sec-Ch-Ua-Mobile": "?1",
+      "Sec-Ch-Ua-Platform": '"Android"',
+      "Sec-Fetch-Dest": "video",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "cross-site",
+      Range: rangeHeader,
+      Cookie: tokenData.cookie,
+    };
+
+    let response = await axios({
+      method: "GET",
+      url: videoUrl,
+      responseType: "stream",
+      headers,
+      timeout: 60000,
+      validateStatus: () => true,
+    });
+
+    if (response.status !== 200 && response.status !== 206) {
+      if (response.status === 403) {
+        // Retry with fresh cookie
+        movieboxTokenCache.expiresAt = Date.now() - 1000;
+        const newToken = await getMovieBoxTokenAndCookie();
+        headers["Cookie"] = newToken.cookie;
+
+        response = await axios({
+          method: "GET",
+          url: videoUrl,
+          responseType: "stream",
+          headers,
+          timeout: 60000,
+          validateStatus: () => true,
+        });
+      }
+    }
+
+    if (response.status !== 200 && response.status !== 206) {
+      return res.status(response.status).json({
+        success: false,
+        error: `CDN returned ${response.status}`,
+      });
+    }
+
+    const contentType = response.headers["content-type"] || "video/mp4";
+    const contentLength = response.headers["content-length"];
+    const contentRange = response.headers["content-range"];
+
+    res.status(response.status);
+    res.setHeader("Content-Type", contentType);
+    if (contentLength) res.setHeader("Content-Length", contentLength);
+    if (contentRange) res.setHeader("Content-Range", contentRange);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "*");
+    res.setHeader("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
+    res.setHeader(
+      "Content-Disposition",
+      filename ? `attachment; filename="${String(filename).replace(/"/g, '')}"` : 'inline; filename="video.mp4"'
+    );
+
+    response.data.pipe(res);
+    return true;
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(500).json({ success: false, error: "Stream error", message: error.message });
+    }
+    return false;
+  }
 }
 
 function proxyWithCurl(targetUrl, reqHeaders, method, isDownload, filename, req, res) {
@@ -1202,6 +1398,128 @@ function isM3u8Playlist(targetUrl) {
   return false;
 }
 
+// ─── MovieBox Proxy Dedicated Endpoints (Omegatech / MovieBox Video Proxy) ───
+app.get(["/info", "/api/moviebox/info"], async (req, res, next) => {
+  try {
+    const { subjectId, detailPath, se = 0, ep = 0 } = req.query;
+    if (!subjectId || !detailPath) {
+      if (req.query.link) return next();
+      return res.status(400).json({ error: "Missing subjectId or detailPath" });
+    }
+
+    const videoUrl = await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), null);
+    const host = req.get("host") || MOVIEBOX_DOMAIN;
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const base = `${protocol}://${host}`;
+    const params = `subjectId=${encodeURIComponent(subjectId)}&detailPath=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
+
+    const qualities = [
+      { quality: "1080p", resolution: 1080, format: "MP4" },
+      { quality: "720p", resolution: 720, format: "MP4" },
+      { quality: "480p", resolution: 480, format: "MP4" },
+    ];
+
+    const qualityList = qualities.map((q) => ({
+      quality: q.quality,
+      resolution: q.resolution,
+      format: q.format,
+      streamUrl: `${base}/stream?${params}&quality=${encodeURIComponent(q.quality)}`,
+      downloadUrl: `${base}/download?${params}&quality=${encodeURIComponent(q.quality)}`,
+    }));
+
+    res.json({
+      success: true,
+      subjectId,
+      detailPath,
+      season: parseInt(se),
+      episode: parseInt(ep),
+      isMovie: parseInt(se) === 0 && parseInt(ep) === 0,
+      qualities: qualityList,
+      bestQuality: qualityList[0],
+      bestQualityUrl: videoUrl,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[INFO] Error:", error.message);
+    res.status(500).json({ error: "Failed to get info", message: error.message });
+  }
+});
+
+app.get(["/stream", "/api/moviebox/stream"], async (req, res, next) => {
+  try {
+    const { subjectId, detailPath, se = 0, ep = 0, quality, url } = req.query;
+    if (url) {
+      const decodedUrl = decodeURIComponent(url);
+      console.log(`[STREAM] URL: ${decodedUrl}`);
+      return await streamMovieBoxVideo(decodedUrl, req, res);
+    }
+    if (!subjectId || !detailPath) {
+      if (req.query.link) return next();
+      return res.status(400).json({ error: "Missing subjectId or detailPath" });
+    }
+
+    const videoUrl = await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), quality);
+    console.log(`[STREAM] URL: ${videoUrl}`);
+    await streamMovieBoxVideo(videoUrl, req, res);
+  } catch (error) {
+    console.error("[STREAM] Error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Stream failed", message: error.message });
+    }
+  }
+});
+
+app.get(["/download", "/api/moviebox/download"], async (req, res, next) => {
+  try {
+    const { subjectId, detailPath, se = 0, ep = 0, quality, url } = req.query;
+    if (url) {
+      const decodedUrl = decodeURIComponent(url);
+      console.log(`[DOWNLOAD] URL: ${decodedUrl}`);
+      return await streamMovieBoxVideo(decodedUrl, req, res, "video.mp4");
+    }
+    if (!subjectId || !detailPath) {
+      if (req.query.link) return next();
+      return res.status(400).json({ error: "Missing subjectId or detailPath" });
+    }
+
+    const videoUrl = await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), quality);
+    console.log(`[DOWNLOAD] URL: ${videoUrl}`);
+    const filename = `video_${subjectId}_s${se}e${ep}.mp4`;
+    await streamMovieBoxVideo(videoUrl, req, res, filename);
+  } catch (error) {
+    console.error("[DOWNLOAD] Error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Download failed", message: error.message });
+    }
+  }
+});
+
+app.get(["/proxy", "/api/moviebox/proxy"], async (req, res) => {
+  try {
+    const url = req.query.url;
+    if (!url) {
+      return res.status(400).json({ error: "Missing url parameter" });
+    }
+    const videoUrl = decodeURIComponent(url);
+    console.log(`[PROXY] URL: ${videoUrl}`);
+    await streamMovieBoxVideo(videoUrl, req, res);
+  } catch (error) {
+    console.error("[PROXY] Error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Proxy failed", message: error.message });
+    }
+  }
+});
+
+app.get(["/health", "/api/moviebox/health"], (req, res) => {
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    domain: MOVIEBOX_DOMAIN,
+  });
+});
+
 app.all("/api/proxy/stream", async (req, res) => {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -1237,6 +1555,7 @@ app.all("/api/proxy/stream", async (req, res) => {
       targetUrl.includes("hakunaymatata.com") ||
       targetUrl.includes("aoneroom.com") ||
       targetUrl.includes("officialmoviebox.com") ||
+      targetUrl.includes("movieboxonline.net") ||
       targetUrl.includes("bcdnxw") ||
       targetUrl.includes("bcdnw") ||
       targetUrl.includes("pbcdnw") ||
@@ -1244,10 +1563,12 @@ app.all("/api/proxy/stream", async (req, res) => {
       targetUrl.includes("moviebox") ||
       targetUrl.includes("videodownloader.site") ||
       String(originReferer).includes("officialmoviebox") ||
+      String(originReferer).includes("movieboxonline") ||
       String(originReferer).includes("videodownloader.site");
 
-    if (isMovieBoxCdn) {
-      originReferer = "https://videodownloader.site/";
+    // MovieBox / Hakuna Matata CDN video streams proxy directly with updated headers, Range, and cookie tokens
+    if (isMovieBoxCdn && !isM3u8Playlist(targetUrl)) {
+      return await streamMovieBoxVideo(targetUrl, req, res, isDownload ? filename : null);
     } else if (
       targetUrl.includes("mxplayer.in") ||
       targetUrl.includes("cloudfront.net") ||
@@ -1670,7 +1991,7 @@ app.get("/api/:provider/stream", async (req, res) => {
             lowerLink.includes("mbcdn");
 
           if (isMovieBox && s.link && !s.link.includes("/api/proxy/stream")) {
-            const refererParam = encodeURIComponent(s.headers?.Referer || "https://officialmoviebox.com/");
+            const refererParam = encodeURIComponent(s.headers?.Referer || "https://movieboxonline.net/");
             const proxiedUrl = `${serverBaseUrl}/api/proxy/stream?url=${encodeURIComponent(s.link)}&referer=${refererParam}`;
             return {
               ...s,

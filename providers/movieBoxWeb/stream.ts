@@ -24,6 +24,12 @@ type Caption = {
 const defaultUserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
+export const DOMAIN = "stream.omegatech.app";
+export const OMEGA_API = "https://omegatech-api.dixonomega.tech/api/movie/MovieBox-pro";
+export const BASE = "https://h5-api.aoneroom.com";
+export const ORIGIN = "https://videodownloader.site";
+export const UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
+
 const requestHeaders = {
   // This provider uses the public anonymous API, not a saved website session.
   // An explicit empty token overrides that cookie in the app's author jar.
@@ -226,9 +232,18 @@ export const getStream = async function ({
     const userAgent =
       providerContext?.commonHeaders?.["User-Agent"] || defaultUserAgent;
     const streamHeaders = {
-      Referer: "https://videodownloader.site/",
-      Origin: "https://videodownloader.site",
-      "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36",
+      "User-Agent": UA,
+      Accept: "*/*",
+      "Accept-Encoding": "identity;q=1, *;q=0",
+      "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+      Origin: "https://movieboxonline.net",
+      Referer: "https://movieboxonline.net/",
+      "Sec-Ch-Ua": '"Chromium";v="139", "Not;A=Brand";v="99"',
+      "Sec-Ch-Ua-Mobile": "?1",
+      "Sec-Ch-Ua-Platform": '"Android"',
+      "Sec-Fetch-Dest": "video",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "cross-site",
     };
 
     if (!playback.subjectId && playback.detailPath) {
@@ -348,6 +363,56 @@ export const getStream = async function ({
       );
       if (hasPlayableStreams(cleanResult)) {
         playResult = cleanResult;
+      }
+    }
+
+    // If still no playable streams, try OMEGA_API fallback
+    if (!hasPlayableStreams(playResult) && playback.subjectId && playback.detailPath) {
+      try {
+        const axiosClient = providerContext?.axios;
+        if (axiosClient) {
+          const omegaUrl = `${OMEGA_API}?action=download&path=${encodeURIComponent(playback.detailPath)}&subjectId=${encodeURIComponent(playback.subjectId)}&detailPath=${encodeURIComponent(playback.detailPath)}&se=${isSeries && seasonNumber > 0 ? seasonNumber : 0}&ep=${isSeries && episodeNumber > 0 ? episodeNumber : 0}`;
+          const omegaRes = await axiosClient.get(omegaUrl, {
+            headers: { Accept: "application/json", "User-Agent": UA, Cookie: "token=" },
+            signal,
+            timeout: 10000,
+            validateStatus: () => true,
+          });
+          if (omegaRes?.status === 200 && omegaRes.data?.success && (omegaRes.data.bestQuality || omegaRes.data.streams?.length)) {
+            const omegaStreams = omegaRes.data.streams || [];
+            if (omegaStreams.length > 0) {
+              playResult = {
+                code: 0,
+                data: {
+                  hasResource: true,
+                  streams: omegaStreams.map((s: any) => ({
+                    format: "MP4",
+                    url: s.originalUrl || s.url || omegaRes.data.bestQuality,
+                    resolutions: String(s.resolution || s.quality || "720").replace(/p$/i, ""),
+                    vipLocked: false,
+                  })),
+                },
+              };
+            } else if (omegaRes.data.bestQuality) {
+              playResult = {
+                code: 0,
+                data: {
+                  hasResource: true,
+                  streams: [
+                    {
+                      format: "MP4",
+                      url: omegaRes.data.bestQuality,
+                      resolutions: "720",
+                      vipLocked: false,
+                    },
+                  ],
+                },
+              };
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("[movieBoxWeb] OMEGA_API fallback error:", e?.message || e);
       }
     }
 

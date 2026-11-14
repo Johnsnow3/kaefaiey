@@ -1,1 +1,2 @@
-export { getStream } from "../movieBoxWeb/stream";
+export { getStream, DOMAIN, OMEGA_API, BASE, ORIGIN, UA } from "../movieBoxWeb/stream";
+
