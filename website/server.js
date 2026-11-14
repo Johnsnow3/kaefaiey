@@ -878,8 +878,8 @@ app.options("/api/proxy/subtitle", (req, res) => {
 });
 
 // ─── MovieBox (Omegatech / Aoneroom) Token & Proxy Manager ───────────────
-const MOVIEBOX_DOMAIN = process.env.MOVIEBOX_DOMAIN || "stream.omegatech.app";
-const MOVIEBOX_OMEGA_API = process.env.MOVIEBOX_OMEGA_API || "https://omegatech-api.dixonomega.tech/api/movie/MovieBox-pro";
+const MOVIEBOX_DOMAIN = process.env.MOVIEBOX_DOMAIN || "moviebeast.up.railway.app";
+const MOVIEBOX_OMEGA_API = process.env.MOVIEBOX_OMEGA_API || "https://moviebeast.up.railway.app/api/movieBox";
 const MOVIEBOX_BASE = "https://h5-api.aoneroom.com";
 const MOVIEBOX_ORIGIN = "https://videodownloader.site";
 const MOVIEBOX_UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
@@ -982,20 +982,28 @@ async function getOmniSaveToken() {
 }
 
 async function getMovieBoxVideoUrl(subjectId, detailPath, se = 0, ep = 0, quality = null) {
-  try {
-    const apiUrl = `${MOVIEBOX_OMEGA_API}?action=download&path=${encodeURIComponent(detailPath)}&subjectId=${encodeURIComponent(subjectId)}&detailPath=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
-    const response = await axios.get(apiUrl, { timeout: 10000 });
-    const data = response.data;
+  // If external OMEGA_API is configured and not pointing to ourselves, query it
+  if (
+    MOVIEBOX_OMEGA_API &&
+    !MOVIEBOX_OMEGA_API.includes("moviebeast.up.railway.app") &&
+    !MOVIEBOX_OMEGA_API.includes("localhost") &&
+    !MOVIEBOX_OMEGA_API.includes("127.0.0.1")
+  ) {
+    try {
+      const apiUrl = `${MOVIEBOX_OMEGA_API}?action=download&path=${encodeURIComponent(detailPath)}&subjectId=${encodeURIComponent(subjectId)}&detailPath=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
+      const response = await axios.get(apiUrl, { timeout: 10000 });
+      const data = response.data;
 
-    if (data && data.success && data.bestQuality) {
-      let videoUrl = data.bestQuality;
-      if (quality && quality !== "best") {
-        const stream = data.streams?.find((s) => s.quality === quality || `${s.resolution}p` === quality);
-        if (stream) videoUrl = stream.originalUrl;
+      if (data && data.success && data.bestQuality) {
+        let videoUrl = data.bestQuality;
+        if (quality && quality !== "best") {
+          const stream = data.streams?.find((s) => s.quality === quality || `${s.resolution}p` === quality);
+          if (stream) videoUrl = stream.originalUrl;
+        }
+        return videoUrl;
       }
-      return videoUrl;
-    }
-  } catch (e) {}
+    } catch (e) {}
+  }
 
   // Fallback to aoneroom download API
   const tokenData = await getMovieBoxTokenAndCookie();
@@ -1518,6 +1526,127 @@ app.get(["/health", "/api/moviebox/health"], (req, res) => {
     uptime: process.uptime(),
     domain: MOVIEBOX_DOMAIN,
   });
+});
+
+// ─── MovieBox Pro API Compatibility Endpoint (/api/movieBox & /api/movie/MovieBox-pro) ───
+app.get(["/api/movieBox", "/api/moviebox", "/api/movie/MovieBox-pro", "/api/movie/moviebox-pro"], async (req, res, next) => {
+  const { action, subjectId, detailPath, se = 0, ep = 0, quality } = req.query;
+
+  // If no MovieBox download/stream query params, pass through
+  if (!subjectId && !detailPath && !action && !req.query.url) {
+    return next();
+  }
+
+  if (action === "stream" || (!action && req.query.url)) {
+    try {
+      const videoUrl = req.query.url
+        ? decodeURIComponent(req.query.url)
+        : await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), quality);
+      return await streamMovieBoxVideo(videoUrl, req, res);
+    } catch (e) {
+      if (!res.headersSent) res.status(500).json({ success: false, error: e.message });
+      return;
+    }
+  }
+
+  if (action === "info") {
+    try {
+      const videoUrl = await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), null);
+      const host = req.get("host") || MOVIEBOX_DOMAIN;
+      const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+      const base = `${protocol}://${host}`;
+      const params = `subjectId=${encodeURIComponent(subjectId)}&detailPath=${encodeURIComponent(detailPath)}&se=${se}&ep=${ep}`;
+
+      const qualities = [
+        { quality: "1080p", resolution: 1080, format: "MP4" },
+        { quality: "720p", resolution: 720, format: "MP4" },
+        { quality: "480p", resolution: 480, format: "MP4" },
+      ];
+
+      return res.json({
+        success: true,
+        subjectId,
+        detailPath,
+        season: parseInt(se),
+        episode: parseInt(ep),
+        isMovie: parseInt(se) === 0 && parseInt(ep) === 0,
+        qualities: qualities.map((q) => ({
+          quality: q.quality,
+          resolution: q.resolution,
+          format: q.format,
+          streamUrl: `${base}/stream?${params}&quality=${encodeURIComponent(q.quality)}`,
+          downloadUrl: `${base}/download?${params}&quality=${encodeURIComponent(q.quality)}`,
+        })),
+        bestQualityUrl: videoUrl,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
+  // Action: download / get streams (compatible with OMEGA_API response format)
+  try {
+    const tokenData = await getMovieBoxTokenAndCookie();
+    const dlRes = await axios.get(`${MOVIEBOX_BASE}/wefeed-h5api-bff/subject/download`, {
+      params: { subjectId, se: parseInt(se), ep: parseInt(ep), detailPath },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": MOVIEBOX_UA,
+        "x-client-info": JSON.stringify({ timezone: "Africa/Conakry" }),
+        "x-client-token": tokenData.clientToken,
+        "x-request-lang": "en",
+        "x-site-domain": "",
+        Authorization: `Bearer ${tokenData.token}`,
+        Cookie: tokenData.cookie,
+        Origin: MOVIEBOX_ORIGIN,
+        Referer: `${MOVIEBOX_ORIGIN}/`,
+        "x-source": "downloader",
+      },
+      timeout: 15000,
+    });
+
+    const data = dlRes.data?.data || {};
+    const rawStreams = (data.streams || data.downloads || []).filter((s) => s.url && !s.vipLocked);
+    const sorted = [...rawStreams].sort(
+      (a, b) => (Number(b.resolutions || b.resolution) || 0) - (Number(a.resolutions || a.resolution) || 0)
+    );
+
+    const streams = sorted.map((s) => ({
+      quality: `${s.resolutions || s.resolution}p`,
+      resolution: Number(s.resolutions || s.resolution) || 720,
+      format: s.format || "MP4",
+      originalUrl: s.url,
+      url: s.url,
+    }));
+
+    const bestQuality = streams[0]?.originalUrl || "";
+
+    return res.json({
+      success: true,
+      subjectId,
+      detailPath,
+      season: parseInt(se),
+      episode: parseInt(ep),
+      bestQuality,
+      streams,
+      captions: data.captions || [],
+    });
+  } catch (error) {
+    try {
+      const bestQuality = await getMovieBoxVideoUrl(subjectId, detailPath, parseInt(se), parseInt(ep), quality);
+      return res.json({
+        success: true,
+        subjectId,
+        detailPath,
+        bestQuality,
+        streams: [{ quality: "720p", resolution: 720, format: "MP4", originalUrl: bestQuality, url: bestQuality }],
+      });
+    } catch (err2) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
 });
 
 app.all("/api/proxy/stream", async (req, res) => {

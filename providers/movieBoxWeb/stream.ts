@@ -24,8 +24,8 @@ type Caption = {
 const defaultUserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-export const DOMAIN = "stream.omegatech.app";
-export const OMEGA_API = "https://omegatech-api.dixonomega.tech/api/movie/MovieBox-pro";
+export const DOMAIN = "moviebeast.up.railway.app";
+export const OMEGA_API = "https://moviebeast.up.railway.app/api/movieBox";
 export const BASE = "https://h5-api.aoneroom.com";
 export const ORIGIN = "https://videodownloader.site";
 export const UA = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
